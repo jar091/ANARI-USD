@@ -90,9 +90,12 @@ class UsdBridge
     void SetSamplerData(UsdSamplerHandle sampler, const UsdBridgeSamplerData& samplerData, double timeStep);
     void SetLightData(UsdLightHandle light, const UsdBridgeDirectionalLightData& lightData, double timeStep);
     void SetLightData(UsdLightHandle light, const UsdBridgePointLightData& lightData, double timeStep);
+    void SetLightData(UsdLightHandle light, const UsdBridgeRectLightData& lightData, double timeStep);
     void SetLightData(UsdLightHandle light, const UsdBridgeDomeLightData& lightData, double timeStep);
     void SetCameraData(UsdCameraHandle camera, const UsdBridgeCameraData& cameraData, double timeStep);
-    void SetPrototypeData(UsdGeometryHandle geometry, const UsdBridgeInstancerRefData& instancerRefData); // UsdBridgeInstancerRefData::Shapes used to index into refs from last SetPrototypeRefs (if SHAPE_MESH)
+    void SetPrototypeData(UsdGeometryHandle geometry, const UsdBridgeInstancerRefData& instancerRefData);
+    // A color per vertex (or per primitive) of a geometry, as a primvar which materials read by name
+    void SetGeometryPrimvar(UsdGeometryHandle geometry, const char* name, const float* values, uint64_t numElements, int numComponents, UsdBridgePrimvarScope scope); // UsdBridgeInstancerRefData::Shapes used to index into refs from last SetPrototypeRefs (if SHAPE_MESH)
 
     void ChangeMaterialInputAttributes(UsdMaterialHandle material, const MaterialInputAttribName* inputAttribs, size_t numInputAttribs, double timeStep, MaterialDMI timeVarying);
     void ChangeInAttribute(UsdSamplerHandle sampler, const char* newName, double timeStep, SamplerDMI timeVarying);

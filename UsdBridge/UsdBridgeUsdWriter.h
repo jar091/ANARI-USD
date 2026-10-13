@@ -165,6 +165,8 @@ public:
     const UsdBridgePointLightData& lightData, double timeStep, bool timeVarHasChanged);
   void UpdateUsdLight(UsdStageRefPtr timeVarStage, const SdfPath& lightPrimPath, 
     const UsdBridgeDomeLightData& lightData, double timeStep, bool timeVarHasChanged);
+  void UpdateUsdLight(UsdStageRefPtr timeVarStage, const SdfPath& lightPrimPath,
+    const UsdBridgeRectLightData& lightData, double timeStep, bool timeVarHasChanged);
   void UpdateUsdCamera(UsdStageRefPtr timeVarStage, const SdfPath& cameraPrimPath, 
     const UsdBridgeCameraData& cameraData, double timeStep, bool timeVarHasChanged);
   void UpdateUsdInstancerPrototypes(const SdfPath& instancerPath, const UsdBridgeInstancerRefData& geomRefData, const SdfPrimPathList& refProtoGeomPrimPaths, const char* protoShapePathRp);

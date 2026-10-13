@@ -123,6 +123,10 @@ class UsdGeometry : public UsdBridgedBaseObject<UsdGeometry, UsdGeometryData, Us
 
     void commit(UsdDevice* device) override;
 
+    // Attributes which image samplers take their texture coordinates from are written as such,
+    // whatever else they hold. Has to be known before the geometry is written.
+    void useAttributesAsTexCoords(uint32_t attributes) { texCoordAttributes |= attributes; }
+
     bool isInstanced() const 
     { 
       return geomType == GEOM_SPHERE
@@ -201,4 +205,7 @@ class UsdGeometry : public UsdBridgedBaseObject<UsdGeometry, UsdGeometryData, Us
     std::unique_ptr<UsdGeometryTempArrays> tempArrays;
 
     AttributeArray attributeArray;
+    // Attributes which are written with two components, see syncAttributeArrays()
+    std::vector<std::vector<float>> attributeTexCoords;
+    uint32_t texCoordAttributes = 0; // Bit per attribute
 };

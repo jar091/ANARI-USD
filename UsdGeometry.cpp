@@ -774,6 +774,42 @@ void UsdGeometry::setAttributeTimeVarying(typename GeomDataType::DataMemberId& t
   }
 }
 
+namespace
+{
+  // Texture coordinates are a primvar of two floats in USD, which is what readers take as
+  // such. An application may pass them with more components, the rest left at the values a
+  // missing component has (0, 0, 0, 1): those arrays lose nothing with two components.
+  // An attribute which is known to be read as texture coordinates is taken without that test.
+  bool extractTexCoords(const UsdDataArray* attribArray, std::vector<float>& texCoords, bool force)
+  {
+    const ANARIDataType type = attribArray->getType();
+    if(type != ANARI_FLOAT32_VEC3 && type != ANARI_FLOAT32_VEC4)
+      return false;
+
+    const UsdDataLayout& layout = attribArray->getLayout();
+    const float* data = static_cast<const float*>(attribArray->getData());
+    if(!data || !layout.isDense() || !layout.isOneDimensional())
+      return false;
+
+    const size_t numComponents = type == ANARI_FLOAT32_VEC3 ? 3 : 4;
+    const size_t numElements = layout.numItems1;
+    for(size_t i = 0; i < numElements && !force; ++i)
+    {
+      const float* element = data + i*numComponents;
+      if(element[2] != 0.0f || (numComponents == 4 && element[3] != 0.0f && element[3] != 1.0f))
+        return false;
+    }
+
+    texCoords.resize(numElements*2);
+    for(size_t i = 0; i < numElements; ++i)
+    {
+      texCoords[i*2] = data[i*numComponents];
+      texCoords[i*2+1] = data[i*numComponents+1];
+    }
+    return true;
+  }
+}
+
 void UsdGeometry::syncAttributeArrays()
 {
   const UsdGeometryData& paramData = getReadParams();
@@ -790,6 +826,7 @@ void UsdGeometry::syncAttributeArrays()
   if(attribCount)
   {
     attributeArray.resize(attribCount);
+    attributeTexCoords.resize(attribCount);
     for(int i = 0; i < attribCount; ++i)
     {
       const UsdDataArray* attribArray = paramData.vertexAttributes[i] ? paramData.vertexAttributes[i] : paramData.primitiveAttributes[i];
@@ -800,6 +837,15 @@ void UsdGeometry::syncAttributeArrays()
         attributeArray[i].PerPrimData = paramData.vertexAttributes[i] ? false : true;
         attributeArray[i].EltSize = static_cast<uint32_t>(anari::sizeOf(attribArray->getType()));
         attributeArray[i].Name = UsdSharedString::c_str(paramData.attributeNames[i]);
+
+        if(extractTexCoords(attribArray, attributeTexCoords[i], ((texCoordAttributes >> i) & 1u) != 0))
+        {
+          attributeArray[i].Data = attributeTexCoords[i].data();
+          attributeArray[i].DataType = UsdBridgeType::FLOAT2;
+          attributeArray[i].EltSize = static_cast<uint32_t>(2*sizeof(float));
+        }
+        else
+          attributeTexCoords[i].clear();
       }
       else
       {

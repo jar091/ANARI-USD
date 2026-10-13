@@ -30,6 +30,10 @@ struct UsdCameraData
   float far = 1000.0f;
   float fovy = M_PI/3.0f;
   float height = 1.0f;
+
+  // depth of field
+  float apertureRadius = 0.0f;
+  float focusDistance = 1.0f;
 };
 
 class UsdCamera : public UsdBridgedBaseObject<UsdCamera, UsdCameraData, UsdCameraHandle, UsdCameraComponents>

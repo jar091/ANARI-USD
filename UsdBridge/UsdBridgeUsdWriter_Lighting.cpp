@@ -5,6 +5,8 @@
 
 #include "UsdBridgeUsdWriter_Common.h"
 
+#include <pxr/usd/usdLux/rectLight.h>
+
 namespace
 {
   template<typename UsdLightPrimType>
@@ -35,6 +37,24 @@ namespace
     lightPrim.CreateRadiusAttr();
   }
 
+  void CreateSpotLight(UsdStageRefPtr lightStage, const SdfPath& lightPrimPath)
+  {
+    CreatePointLight(lightStage, lightPrimPath);
+    UsdLuxShapingAPI shaping = UsdLuxShapingAPI::Apply(lightStage->GetPrimAtPath(lightPrimPath));
+    assert(shaping);
+    shaping.CreateShapingConeAngleAttr();
+    shaping.CreateShapingConeSoftnessAttr();
+  }
+
+  void CreateRectLight(UsdStageRefPtr lightStage, const SdfPath& lightPrimPath)
+  {
+    CreateLightCommon<UsdLuxRectLight>(lightStage, lightPrimPath);
+    UsdLuxRectLight lightPrim = UsdLuxRectLight::Get(lightStage, lightPrimPath);
+    assert(lightPrim);
+    lightPrim.CreateWidthAttr();
+    lightPrim.CreateHeightAttr();
+  }
+
   void CreateDomeLight(UsdStageRefPtr lightStage, const SdfPath& lightPrimPath)
   {
     CreateLightCommon<UsdLuxDomeLight>(lightStage, lightPrimPath);
@@ -47,6 +67,8 @@ void UsdBridgeUsdWriter::InitializeUsdLight(UsdStageRefPtr lightStage, const Sdf
   {
     case UsdBridgeLightType::DIRECTIONAL: CreateDirectionalLight(lightStage, lightPrimPath); break;
     case UsdBridgeLightType::POINT: CreatePointLight(lightStage, lightPrimPath); break;
+    case UsdBridgeLightType::SPOT: CreateSpotLight(lightStage, lightPrimPath); break;
+    case UsdBridgeLightType::QUAD: CreateRectLight(lightStage, lightPrimPath); break;
     default: CreateDomeLight(lightStage, lightPrimPath); break;
   };
 }
@@ -76,9 +98,9 @@ namespace
     ClearAndSetUsdAttribute(lightPrim.GetExposureAttr(), lightData.Exposure,
       timeEval.Eval(DMI::INTENSITY), timeVarHasChanged && !timeEval.IsTimeVarying(DMI::INTENSITY));
 
-    // Author normalize=true so 'intensity' has a renderer-independent
-    // physical meaning across light types: lux for DistantLight,
-    // candela for SphereLight, nits for DomeLight.
+    // Author normalize=true, so the power of a light does not depend on its size: 'intensity'
+    // is then the power of a sphere or rect light divided by pi, and the irradiance of a
+    // distant light.
     lightPrim.GetNormalizeAttr().Set(true);
 
     return lightPrim;
@@ -136,9 +158,79 @@ void UsdBridgeUsdWriter::UpdateUsdLight(UsdStageRefPtr timeVarStage, const SdfPa
   GfVec3f position(lightData.Position.Data);
 
   lightPrim.ClearXformOpOrder();
-  UsdGeomXformOp translOp = lightPrim.AddTranslateOp(UsdGeomXformOp::PrecisionFloat);
+  if(lightData.ConeAngle < 0.0f)
+  {
+    UsdGeomXformOp translOp = lightPrim.AddTranslateOp(UsdGeomXformOp::PrecisionFloat);
 
-  ClearAndSetUsdAttribute(translOp.GetAttr(), position, timeEval.Eval(DMI::POSITION),
+    ClearAndSetUsdAttribute(translOp.GetAttr(), position, timeEval.Eval(DMI::POSITION),
+      timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
+  }
+  else
+  {
+    // A light with a cone shines along its -z axis
+    UsdLuxShapingAPI shaping(lightPrim.GetPrim());
+    ClearAndSetUsdAttribute(shaping.CreateShapingConeAngleAttr(), lightData.ConeAngle, timeEval.Eval(DMI::POSITION),
+      timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
+    ClearAndSetUsdAttribute(shaping.CreateShapingConeSoftnessAttr(), lightData.ConeSoftness, timeEval.Eval(DMI::POSITION),
+      timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
+
+    GfVec3d eyePoint(position);
+    GfVec3d fwdDir(lightData.Direction.Data);
+    const double absX = std::fabs(lightData.Direction.Data[0]);
+    const double absY = std::fabs(lightData.Direction.Data[1]);
+    GfVec3d approxUpDir = (absX < absY) ? GfVec3d(1.0, 0.0, 0.0) : GfVec3d(0.0, 1.0, 0.0);// SetLookAt will orthogonalize
+
+    GfMatrix4d viewMatrix;
+    viewMatrix.SetLookAt(eyePoint, eyePoint+fwdDir, approxUpDir);
+    GfMatrix4d xform = viewMatrix.GetInverse(); // local-to-world
+
+    UsdGeomXformOp xformOp = lightPrim.AddTransformOp();
+    ClearAndSetUsdAttribute(xformOp.GetAttr(), xform, timeEval.Eval(DMI::POSITION),
+      timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
+  }
+}
+
+void UsdBridgeUsdWriter::UpdateUsdLight(UsdStageRefPtr timeVarStage, const SdfPath& lightPrimPath,
+  const UsdBridgeRectLightData& lightData, double timeStep, bool timeVarHasChanged)
+{
+  typedef typename UsdBridgeRectLightData::DataMemberId DMI;
+
+  const TimeEvaluator<UsdBridgeRectLightData> timeEval(lightData, timeStep);
+  UsdLuxRectLight lightPrim = UpdateUsdLightCommon<UsdBridgeRectLightData, UsdLuxRectLight>(
+    timeVarStage, lightPrimPath, lightData, timeStep, timeVarHasChanged, timeEval);
+
+  // A rect light lies in its xy plane around the origin and shines along its -z axis:
+  // x and y follow the edges, with y reversed so that -z is cross(Edge1, Edge2).
+  const GfVec3d edge1(lightData.Edge1.Data);
+  const GfVec3d edge2(lightData.Edge2.Data);
+  const double width = edge1.GetLength();
+  const double height = edge2.GetLength();
+
+  GfVec3d xAxis = width > 0.0 ? edge1 / width : GfVec3d(1.0, 0.0, 0.0);
+  GfVec3d zAxis = -GfCross(edge1, edge2);
+  if(zAxis.GetLength() > 0.0)
+    zAxis.Normalize();
+  else
+    zAxis = GfVec3d(0.0, 0.0, 1.0);
+  const GfVec3d yAxis = GfCross(zAxis, xAxis);
+  const GfVec3d center = GfVec3d(lightData.Position.Data) + 0.5 * (edge1 + edge2);
+
+  // Row-major order, with pre-multiply rules (see the camera)
+  GfMatrix4d xform(
+    xAxis[0], xAxis[1], xAxis[2], 0.0,
+    yAxis[0], yAxis[1], yAxis[2], 0.0,
+    zAxis[0], zAxis[1], zAxis[2], 0.0,
+    center[0], center[1], center[2], 1.0
+  );
+
+  ClearAndSetUsdAttribute(lightPrim.GetWidthAttr(), float(width), timeEval.Eval(DMI::POSITION),
+    timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
+  ClearAndSetUsdAttribute(lightPrim.GetHeightAttr(), float(height), timeEval.Eval(DMI::POSITION),
+    timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
+
+  lightPrim.ClearXformOpOrder();
+  UsdGeomXformOp xformOp = lightPrim.AddTransformOp();
+  ClearAndSetUsdAttribute(xformOp.GetAttr(), xform, timeEval.Eval(DMI::POSITION),
     timeVarHasChanged && !timeEval.IsTimeVarying(DMI::POSITION));
 }
 

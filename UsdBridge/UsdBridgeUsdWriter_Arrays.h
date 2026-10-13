@@ -591,7 +591,7 @@ namespace UsdBridgeArrays
       case UsdBridgeType::UINT2:
       case UsdBridgeType::INT2: { result = SdfValueTypeNames->Int2Array; break; }
       case UsdBridgeType::HALF2: { result = SdfValueTypeNames->Half2Array; break; }
-      case UsdBridgeType::FLOAT2: { result = SdfValueTypeNames->Float2Array; break; }
+      case UsdBridgeType::FLOAT2: { result = SdfValueTypeNames->TexCoord2fArray; break; }
       case UsdBridgeType::DOUBLE2: { result = SdfValueTypeNames->Double2Array; break; }
 
       case UsdBridgeType::UCHAR3:

@@ -171,7 +171,7 @@ namespace
         SdfValueTypeName primvarType = UsdBridgeArrays::GetAttribArrayType(attrib.DataType);
         if(primvarType == SdfValueTypeNames->BoolArray)
         {
-          UsdBridgeLogMacro(writer->LogObject, UsdBridgeLogLevel::WARNING, "UsdGeom Attribute<" << attribIndex << "> primvar does not support source data type: " << attrib.DataType);
+          UsdBridgeLogMacro(writer->LogObject, UsdBridgeLogLevel::WARNING, "UsdGeom Attribute<" << attribIndex << "> primvar does not support source data type: " << ubutils::UsdBridgeTypeToString(attrib.DataType));
         }
 
         // Allow for attrib primvar types to change

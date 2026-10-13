@@ -1127,6 +1127,40 @@ void UsdBridge::SetLightDataTemplate(UsdLightHandle light, const LightDataType& 
 #endif
 }
 
+void UsdBridge::SetGeometryPrimvar(UsdGeometryHandle geometry, const char* name, const float* values, uint64_t numElements, int numComponents, UsdBridgePrimvarScope scope)
+{
+  if (geometry.value == nullptr) return;
+
+  UsdBridgePrimCache* cache = BRIDGE_CACHE.ConvertToPrimCache(geometry);
+  UsdStageRefPtr sceneStage = BRIDGE_USDWRITER.GetSceneStage();
+  UsdPrim geomPrim = sceneStage->GetPrimAtPath(cache->PrimPath);
+  if(!geomPrim)
+    return;
+
+  const TfToken& interpolation = (scope == UsdBridgePrimvarScope::CONSTANT) ? UsdGeomTokens->constant
+    : ((scope == UsdBridgePrimvarScope::PRIMITIVE) ? UsdGeomTokens->uniform : UsdGeomTokens->vertex);
+  UsdGeomPrimvarsAPI primvars(geomPrim);
+
+  if(numComponents == 1)
+  {
+    VtFloatArray floats(numElements);
+    memcpy(floats.data(), values, numElements * sizeof(float));
+    primvars.CreatePrimvar(TfToken(name), SdfValueTypeNames->FloatArray, interpolation).Set(floats);
+  }
+  else if(numComponents == 2)
+  {
+    VtVec2fArray texCoords(numElements);
+    memcpy(texCoords.data(), values, numElements * 2 * sizeof(float));
+    primvars.CreatePrimvar(TfToken(name), SdfValueTypeNames->TexCoord2fArray, interpolation).Set(texCoords);
+  }
+  else
+  {
+    VtVec3fArray colors(numElements);
+    memcpy(colors.data(), values, numElements * 3 * sizeof(float));
+    primvars.CreatePrimvar(TfToken(name), SdfValueTypeNames->Color3fArray, interpolation).Set(colors);
+  }
+}
+
 void UsdBridge::SetLightData(UsdLightHandle light, const UsdBridgeDirectionalLightData& lightData, double timeStep)
 {
   SetLightDataTemplate<UsdBridgeDirectionalLightData>(light, lightData, timeStep);
@@ -1135,6 +1169,11 @@ void UsdBridge::SetLightData(UsdLightHandle light, const UsdBridgeDirectionalLig
 void UsdBridge::SetLightData(UsdLightHandle light, const UsdBridgePointLightData& lightData, double timeStep)
 {
   SetLightDataTemplate<UsdBridgePointLightData>(light, lightData, timeStep);
+}
+
+void UsdBridge::SetLightData(UsdLightHandle light, const UsdBridgeRectLightData& lightData, double timeStep)
+{
+  SetLightDataTemplate<UsdBridgeRectLightData>(light, lightData, timeStep);
 }
 
 void UsdBridge::SetLightData(UsdLightHandle light, const UsdBridgeDomeLightData& lightData, double timeStep)

@@ -30,6 +30,29 @@ From this directory, run `mkdir _build && cd _build`, after which there are two 
 
 After configuring and generating any of the above builds, run `cmake --build . --config [Release|Debug] --target install` to build and install.
 
+#### Windows build for blenderphi
+
+In the shared workspace containing `ANARI-USD`, `blenderphi`, `build`, and
+`install`, run the following from this repository:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-blenderphi-windows.ps1
+```
+
+This uses Visual Studio 2022 x64 Release, the ANARI SDK in `install`, and
+Blender's bundled OpenUSD, Python 3.13, and TBB libraries. It requires an
+already configured and installed blenderphi build in `build/blender`.
+`USD_DEVICE_USE_MONOLITHIC=ON` imports Blender's `usd_ms` library directly,
+without relying on the bundled `pxrConfig` development packages.
+
+The script installs the device into `install/bin` and copies
+`anari_library_usd.dll` and `UsdBridge_Volume.dll` beside Blender's
+`blender.shared/anari.dll`. Blender's ANARI engine probes the library name
+`usd`; older builds can add `usd` in the ANARI add-on's Additional Libraries.
+Set `usd::serialize.location=F:/path/to/output` in Device Parameters to choose
+the export directory. This configuration uses the default USD export mode;
+Hydra rendering, OpenVDB output, MPI, and Omniverse support remain disabled.
+
 ### Usage notes #
 
 - Library and device names are both `usd`

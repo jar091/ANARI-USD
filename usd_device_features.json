@@ -39,6 +39,18 @@
                     "default" : 0.0,
                     "description" : "Global scene timestep"
                 }, {
+                    "name" : "usd::stage.upAxis",
+                    "types" : ["ANARI_STRING"],
+                    "tags" : [],
+                    "values" : ["y", "z"],
+                    "description" : "Up axis of the scene, written to the stage. Without it a reader assumes the default of USD (y)."
+                }, {
+                    "name" : "usd::stage.metersPerUnit",
+                    "types" : ["ANARI_FLOAT32"],
+                    "tags" : [],
+                    "default" : 0.0,
+                    "description" : "Size of a scene unit in meters, written to the stage. Without it (0) a reader assumes the default of USD (0.01)."
+                }, {
                     "name" : "usd::writeAtCommit",
                     "types" : ["ANARI_BOOL"],
                     "tags" : [],

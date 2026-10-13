@@ -10,6 +10,7 @@
 
 #include <pxr/usd/usdRender/product.h>
 #include <pxr/usd/usdRender/settings.h>
+#include <pxr/usd/usdGeom/metrics.h>
 
 #include <filesystem>
 #include <typeinfo>
@@ -192,10 +193,36 @@ void UsdBridgeUsdWriter::SetEnableSaving(bool enableSaving)
   this->EnableSaving = enableSaving;
 }
 
+namespace
+{
+  // Prims which only group other prims come into being along with their first child, without
+  // a type. A reader does not have to continue through a prim it knows nothing about, and
+  // importers commonly stop there or lose the transforms above it: they are made scopes.
+  void TypeGroupingPrims(const UsdStageRefPtr& stage, const SdfPrimSpecHandle& primSpec)
+  {
+    static const TfToken scopeToken("Scope");
+    for(const SdfPrimSpecHandle& child : primSpec->GetNameChildren())
+    {
+      // A prim which gets its type from what it references is left alone
+      if(child->GetTypeName().IsEmpty() && !child->GetNameChildren().empty()
+        && child->GetSpecifier() == SdfSpecifierDef)
+      {
+        UsdPrim prim = stage->GetPrimAtPath(child->GetPath());
+        if(prim && prim.GetTypeName().IsEmpty())
+          child->SetTypeName(scopeToken);
+      }
+      TypeGroupingPrims(stage, child);
+    }
+  }
+}
+
 void UsdBridgeUsdWriter::SaveScene()
 {
   if(this->EnableSaving)
+  {
+    TypeGroupingPrims(this->SceneStage, this->SceneStage->GetRootLayer()->GetPseudoRoot());
     this->SceneStage->Save();
+  }
 }
 
 int UsdBridgeUsdWriter::FindSessionNumber()
@@ -518,6 +545,14 @@ bool UsdBridgeUsdWriter::OpenSceneStage()
       this->SceneStage->GetRootLayer()->GetIdentifier());
   }
 #endif
+
+  if(Settings.UpAxis)
+  {
+    const bool zUp = Settings.UpAxis[0] == 'z' || Settings.UpAxis[0] == 'Z';
+    UsdGeomSetStageUpAxis(this->SceneStage, zUp ? UsdGeomTokens->z : UsdGeomTokens->y);
+  }
+  if(Settings.MetersPerUnit > 0.0)
+    UsdGeomSetStageMetersPerUnit(this->SceneStage, Settings.MetersPerUnit);
 
   this->RootClassName = constring::rootClassName;
   UsdPrim rootClassPrim = this->SceneStage->CreateClassPrim(SdfPath(this->RootClassName));
@@ -1193,6 +1228,7 @@ void UsdBridgeUsdWriter::InitializeUsdCamera(UsdStageRefPtr cameraStage, const S
   cameraPrim.CreateFocalLengthAttr();
   cameraPrim.CreateClippingRangeAttr();
   cameraPrim.CreateFocusDistanceAttr();
+  cameraPrim.CreateFStopAttr();
 }
 
 void UsdBridgeUsdWriter::BindMaterialToGeom(const SdfPath & refGeomPath, const SdfPath & refMatPath)
@@ -1267,13 +1303,24 @@ void UsdBridgeUsdWriter::UpdateUsdCamera(UsdStageRefPtr timeVarStage, const SdfP
   ClearAndSetUsdAttribute(xformOp.GetAttr(), camMatrix, timeEval.Eval(DMI::VIEW),
     timeVarHasChanged && !timeEval.IsTimeVarying(DMI::VIEW));
 
-  const GfVec3f camScaling(0.01f); // Add a default cam scaling for UI purposes
-  UsdGeomXformOp scaleOp = cameraPrim.AddScaleOp();
-  scaleOp.GetAttr().Set(camScaling, UsdTimeCode::Default());
+  // Without a known size of the scene unit the camera is scaled down, for UI purposes only
+  const bool knownUnits = Settings.MetersPerUnit > 0.0;
+  if(!knownUnits)
+  {
+    const GfVec3f camScaling(0.01f);
+    UsdGeomXformOp scaleOp = cameraPrim.AddScaleOp();
+    scaleOp.GetAttr().Set(camScaling, UsdTimeCode::Default());
+  }
   
-  // Helper function for the projection matrix (takes fov in degrees)
+  // Helper function for the projection matrix (takes fov in degrees). The apertures and the
+  // focal length of a camera are in tenths of a scene unit: with a known unit the film is
+  // 24 mm high, which gives the focal length and the f-stop the size of a real camera.
   GfCamera gfCam;
-  gfCam.SetPerspectiveFromAspectRatioAndFieldOfView(cameraData.Aspect, GfRadiansToDegrees(cameraData.Fovy), GfCamera::FOVVertical);
+  const float verticalAperture = knownUnits
+    ? float(0.024 / (0.1 * Settings.MetersPerUnit))
+    : float(GfCamera::DEFAULT_HORIZONTAL_APERTURE / cameraData.Aspect);
+  gfCam.SetPerspectiveFromAspectRatioAndFieldOfView(cameraData.Aspect, GfRadiansToDegrees(cameraData.Fovy), GfCamera::FOVVertical,
+    verticalAperture * cameraData.Aspect);
 
   // Update all attributes affected by SetPerspectiveFromAspectRatioAndFieldOfView (see implementation)
   UsdTimeCode projectTime = timeEval.Eval(DMI::PROJECTION);
@@ -1287,7 +1334,14 @@ void UsdBridgeUsdWriter::UpdateUsdCamera(UsdStageRefPtr timeVarStage, const SdfP
   ClearAndSetUsdAttribute(cameraPrim.GetVerticalApertureAttr(), gfCam.GetVerticalAperture(), projectTime, clearProjAttrib);
   ClearAndSetUsdAttribute(cameraPrim.GetFocalLengthAttr(), gfCam.GetFocalLength(), projectTime, clearProjAttrib);
   ClearAndSetUsdAttribute(cameraPrim.GetClippingRangeAttr(), GfVec2f(cameraData.Near, cameraData.Far), projectTime, clearProjAttrib);
-  //ClearAndSetUsdAttribute(cameraPrim.GetFocusDistanceAttr(), focusDistance, projectTime, clearProjAttrib);
+
+  // An f-stop of zero means no depth of field. The radius of the lens is in scene units and
+  // the focal length in tenths of them.
+  const float fStop = cameraData.ApertureRadius > 0.0f
+    ? 0.1f * gfCam.GetFocalLength() / (2.0f * cameraData.ApertureRadius)
+    : 0.0f;
+  ClearAndSetUsdAttribute(cameraPrim.GetFStopAttr(), fStop, projectTime, clearProjAttrib);
+  ClearAndSetUsdAttribute(cameraPrim.GetFocusDistanceAttr(), cameraData.FocusDistance, projectTime, clearProjAttrib);
 }
 
 void UsdBridgeUsdWriter::UpdateBeginEndTime(double timeStep)

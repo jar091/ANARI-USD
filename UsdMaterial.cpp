@@ -8,6 +8,8 @@
 #include "UsdDataArray.h"
 #include "UsdGeometry.h"
 
+#include <type_traits>
+
 #define SamplerType ANARI_SAMPLER
 using SamplerUsdType = AnariToUsdBridgedObject<SamplerType>::Type;
 
@@ -36,7 +38,11 @@ DEFINE_PARAMETER_MAP(UsdMaterial,
   REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("emissiveIntensity", ANARI_FLOAT32, emissiveIntensity)
   REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("roughness", ANARI_FLOAT32, roughness)
   REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("metallic", ANARI_FLOAT32, metallic)
-  REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("ior", ANARI_FLOAT32, ior) 
+  REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("ior", ANARI_FLOAT32, ior)
+  REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("clearcoat", ANARI_FLOAT32, clearcoat)
+  REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("clearcoatRoughness", ANARI_FLOAT32, clearcoatRoughness)
+  REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("normal", ANARI_FLOAT32_VEC3, normal)
+  REGISTER_PARAMETER_MATERIAL_MULTITYPE_MACRO("occlusion", ANARI_FLOAT32, occlusion)
 )
 
 constexpr UsdMaterial::ComponentPair UsdMaterial::componentParamNames[]; // Workaround for C++14's lack of inlining constexpr arrays
@@ -73,6 +79,16 @@ void UsdMaterial::remove(UsdDevice* device)
   applyRemoveFunc(device, &UsdBridge::DeleteMaterial);
 }
 
+namespace
+{
+  // Name of the primvar which the output of a transform sampler is written to
+  template<typename ValueType>
+  const char* transformSamplerOutput(const UsdSampler* sampler)
+  {
+    return std::is_same<ValueType, float>::value ? sampler->getScalarOutputName() : sampler->getName();
+  }
+}
+
 template<typename ValueType>
 void UsdMaterial::changeMaterialInputSource(const UsdMaterialMultiTypeParameter<ValueType>& param,
   MaterialDMI dataMemberId, const UsdGeometryData& geomParamData, bool forceUpdate,
@@ -97,7 +113,10 @@ void UsdMaterial::changeMaterialInputSource(const UsdMaterialMultiTypeParameter<
     UsdSampler* sampler = nullptr;
     if (param.Get(sampler))
     {
-      sampler->updateBoundParameters(perInstance, geomParamData.attributeNames, MAX_ATTRIBS, device);
+      if(sampler->isTransform()) // Read from the primvar which has been written for the geometry
+        materialInputAttributes.push_back(UsdBridge::MaterialInputAttribName(dataMemberId, transformSamplerOutput<ValueType>(sampler)));
+      else
+        sampler->updateBoundParameters(perInstance, geomParamData.attributeNames, MAX_ATTRIBS, device);
     }
   }
 }
@@ -108,7 +127,7 @@ bool UsdMaterial::getSamplerRefData(const UsdMaterialMultiTypeParameter<ValueTyp
   UsdSampler* sampler = nullptr;
   param.Get(sampler);
 
-  if(sampler)
+  if(sampler && !sampler->isTransform())
   {
     const UsdSamplerData& samplerParamData = sampler->getReadParams();
 
@@ -154,6 +173,104 @@ void UsdMaterial::assignParameterToMaterialInput(const UsdMaterialMultiTypeParam
 
   UsdSampler* sampler = nullptr;
   matInput.Sampler = param.Get(sampler);
+
+  // The output of a transform sampler is a primvar of the geometry, see bakeTransformSamplers()
+  if(sampler && sampler->isTransform())
+  {
+    matInput.SrcAttrib = transformSamplerOutput<ValueType>(sampler);
+    matInput.Sampler = false;
+  }
+}
+
+namespace
+{
+  template<typename ParamType>
+  UsdSampler* transformSamplerOf(const ParamType& param)
+  {
+    UsdSampler* sampler = nullptr;
+    return (param.Get(sampler) && sampler && sampler->isTransform()) ? sampler : nullptr;
+  }
+}
+
+void UsdMaterial::bakeTransformSamplers(UsdGeometry* geometry, UsdDevice* device)
+{
+  const UsdMaterialData& paramData = getReadParams();
+
+  UsdSampler* colorSamplers[] = {
+    transformSamplerOf(paramData.color),
+    transformSamplerOf(paramData.emissiveColor)
+  };
+  UsdSampler* scalarSamplers[] = {
+    transformSamplerOf(paramData.opacity),
+    transformSamplerOf(paramData.emissiveIntensity),
+    transformSamplerOf(paramData.roughness),
+    transformSamplerOf(paramData.metallic),
+    transformSamplerOf(paramData.ior),
+    transformSamplerOf(paramData.clearcoat),
+    transformSamplerOf(paramData.clearcoatRoughness)
+  };
+
+  for(UsdSampler* sampler : colorSamplers)
+  {
+    if(sampler)
+      sampler->bakeAttribute(geometry, false, device);
+  }
+  for(UsdSampler* sampler : scalarSamplers)
+  {
+    if(sampler)
+      sampler->bakeAttribute(geometry, true, device);
+  }
+
+  // Texture coordinates which no node of the shading network can compute
+  auto bakeCoordinatesOf = [geometry, device](const auto& param)
+  {
+    UsdSampler* sampler = nullptr;
+    if(param.Get(sampler) && sampler)
+      sampler->bakeCoordinates(geometry, device);
+  };
+
+  bakeCoordinatesOf(paramData.color);
+  bakeCoordinatesOf(paramData.opacity);
+  bakeCoordinatesOf(paramData.emissiveColor);
+  bakeCoordinatesOf(paramData.emissiveIntensity);
+  bakeCoordinatesOf(paramData.roughness);
+  bakeCoordinatesOf(paramData.metallic);
+  bakeCoordinatesOf(paramData.ior);
+  bakeCoordinatesOf(paramData.clearcoat);
+  bakeCoordinatesOf(paramData.clearcoatRoughness);
+  bakeCoordinatesOf(paramData.normal);
+  bakeCoordinatesOf(paramData.occlusion);
+}
+
+uint32_t UsdMaterial::getTexCoordAttributes() const
+{
+  const UsdMaterialData& paramData = getReadParams();
+
+  uint32_t attributes = 0;
+  auto addSamplerOf = [&attributes](const auto& param)
+  {
+    UsdSampler* sampler = nullptr;
+    if(param.Get(sampler) && sampler)
+    {
+      const int attribIndex = sampler->getTexCoordAttribute();
+      if(attribIndex >= 0)
+        attributes |= 1u << attribIndex;
+    }
+  };
+
+  addSamplerOf(paramData.color);
+  addSamplerOf(paramData.opacity);
+  addSamplerOf(paramData.emissiveColor);
+  addSamplerOf(paramData.emissiveIntensity);
+  addSamplerOf(paramData.roughness);
+  addSamplerOf(paramData.metallic);
+  addSamplerOf(paramData.ior);
+  addSamplerOf(paramData.clearcoat);
+  addSamplerOf(paramData.clearcoatRoughness);
+  addSamplerOf(paramData.normal);
+  addSamplerOf(paramData.occlusion);
+
+  return attributes;
 }
 
 void UsdMaterial::updateBoundParameters(bool boundToInstance, const UsdGeometryData& geomParamData, UsdDevice* device)
@@ -189,6 +306,10 @@ void UsdMaterial::updateBoundParameters(bool boundToInstance, const UsdGeometryD
   changeMaterialInputSource(paramData.roughness, DMI::ROUGHNESS, geomParamData, forceUpdate, device, logInfo);
   changeMaterialInputSource(paramData.metallic, DMI::METALLIC, geomParamData, forceUpdate, device, logInfo);
   changeMaterialInputSource(paramData.ior, DMI::IOR, geomParamData, forceUpdate, device, logInfo);
+  changeMaterialInputSource(paramData.clearcoat, DMI::CLEARCOAT, geomParamData, forceUpdate, device, logInfo);
+  changeMaterialInputSource(paramData.clearcoatRoughness, DMI::CLEARCOATROUGHNESS, geomParamData, forceUpdate, device, logInfo);
+  changeMaterialInputSource(paramData.normal, DMI::NORMAL, geomParamData, forceUpdate, device, logInfo);
+  changeMaterialInputSource(paramData.occlusion, DMI::OCCLUSION, geomParamData, forceUpdate, device, logInfo);
 
   DMI timeVarying;
   setMaterialTimeVarying(timeVarying);
@@ -245,6 +366,10 @@ bool UsdMaterial::doCommitData(UsdDevice* device)
     assignParameterToMaterialInput(paramData.roughness, matData.Roughness, useDisplayColorOpacity, logInfo);
     assignParameterToMaterialInput(paramData.metallic, matData.Metallic, useDisplayColorOpacity, logInfo);
     assignParameterToMaterialInput(paramData.ior, matData.Ior, useDisplayColorOpacity, logInfo);
+    assignParameterToMaterialInput(paramData.clearcoat, matData.Clearcoat, useDisplayColorOpacity, logInfo);
+    assignParameterToMaterialInput(paramData.clearcoatRoughness, matData.ClearcoatRoughness, useDisplayColorOpacity, logInfo);
+    assignParameterToMaterialInput(paramData.normal, matData.Normal, useDisplayColorOpacity, logInfo);
+    assignParameterToMaterialInput(paramData.occlusion, matData.Occlusion, useDisplayColorOpacity, logInfo);
 
     setMaterialTimeVarying(matData.TimeVarying);
 
@@ -252,7 +377,12 @@ bool UsdMaterial::doCommitData(UsdDevice* device)
 
     paramChanged = false;
 
-    return paramData.color.type == SamplerType; // Only commit refs when material actually contains a texture (filename param from diffusemap is required)
+    // Only commit refs when the material actually contains a texture
+    return paramData.color.type == SamplerType || paramData.opacity.type == SamplerType
+      || paramData.emissiveColor.type == SamplerType || paramData.roughness.type == SamplerType
+      || paramData.metallic.type == SamplerType || paramData.clearcoat.type == SamplerType
+      || paramData.clearcoatRoughness.type == SamplerType || paramData.normal.type == SamplerType
+      || paramData.occlusion.type == SamplerType;
   }
 
   return false;
@@ -278,6 +408,12 @@ void UsdMaterial::doCommitRefs(UsdDevice* device)
   getSamplerRefData(paramData.metallic, paramData.metallicSamplerTimeStep, DMI::METALLIC, device, logInfo);
   getSamplerRefData(paramData.ior, paramData.iorSamplerTimeStep, DMI::IOR, device, logInfo);
 
+  const double noRefTime = std::numeric_limits<double>::quiet_NaN();
+  getSamplerRefData(paramData.clearcoat, noRefTime, DMI::CLEARCOAT, device, logInfo);
+  getSamplerRefData(paramData.clearcoatRoughness, noRefTime, DMI::CLEARCOATROUGHNESS, device, logInfo);
+  getSamplerRefData(paramData.normal, noRefTime, DMI::NORMAL, device, logInfo);
+  getSamplerRefData(paramData.occlusion, noRefTime, DMI::OCCLUSION, device, logInfo);
+
   if(samplerHandles.size())
     usdBridge->SetSamplerRefs(usdHandle, samplerHandles.data(), samplerHandles.size(), worldTimeStep, samplerRefDatas.data());
   else
@@ -293,5 +429,7 @@ void UsdMaterial::setMaterialTimeVarying(UsdBridgeMaterialData::DataMemberId& ti
     & (isTimeVarying(CType::EMISSIVEFACTOR) ? DMI::ALL : ~DMI::EMISSIVEINTENSITY)
     & (isTimeVarying(CType::ROUGHNESS) ? DMI::ALL : ~DMI::ROUGHNESS)
     & (isTimeVarying(CType::METALLIC) ? DMI::ALL : ~DMI::METALLIC)
-    & (isTimeVarying(CType::IOR) ? DMI::ALL : ~DMI::IOR);
+    & (isTimeVarying(CType::IOR) ? DMI::ALL : ~DMI::IOR)
+    // No component stands for these inputs: they are part of the material as it is defined
+    & ~(DMI::CLEARCOAT | DMI::CLEARCOATROUGHNESS | DMI::NORMAL | DMI::OCCLUSION);
 }

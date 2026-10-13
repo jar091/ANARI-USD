@@ -46,6 +46,9 @@ struct UsdDeviceData
   bool outputPreviewSurfaceShader = true;
   bool outputMdlShader = true;
   bool useDisplayColorOpacity = false;
+
+  UsdSharedString* upAxis = nullptr;
+  float metersPerUnit = 0.0f;
 };
 
 class UsdDevice : public anari::DeviceImpl, public UsdParameterizedBaseObject<UsdDevice, UsdDeviceData>

@@ -341,10 +341,20 @@ enum class UsdBridgeVolumeFieldType
   COLOR
 };
 
+// What the elements of a primvar belong to
+enum class UsdBridgePrimvarScope
+{
+  VERTEX,
+  PRIMITIVE,
+  CONSTANT
+};
+
 enum class UsdBridgeLightType
 {
   DIRECTIONAL,
   POINT,
+  SPOT,
+  QUAD,
   DOME
 };
 
@@ -378,6 +388,12 @@ struct UsdBridgeSettings
   int MpiRank = -1;                         // MPI rank of this process (-1 = no MPI)
   int MpiSize = -1;                         // Total number of MPI processes (-1 = no MPI)
   UsdBridgeParallelController* ParallelController = nullptr; // Abstract controller for collective operations (owned by caller)
+
+  // Stage metadata. ANARI has no notion of an up axis or of the size of a unit, so these are
+  // what the application says about its own scene; left unset, nothing is authored and a
+  // reader falls back to the defaults of USD (Y up, centimeters).
+  const char* UpAxis = nullptr;             // "y" or "z"
+  double MetersPerUnit = 0.0;               // Size of a scene unit in meters, 0 if unknown
 
   // About to be deprecated
   static constexpr bool EnableStTexCoords = false;
@@ -656,7 +672,12 @@ struct UsdBridgeMaterialData
     ROUGHNESS = (1 << 4),
     METALLIC = (1 << 5),
     IOR = (1 << 6),
-    ALL = (1 << 7) - 1
+    // Inputs of the preview surface only
+    CLEARCOAT = (1 << 7),
+    CLEARCOATROUGHNESS = (1 << 8),
+    NORMAL = (1 << 9),
+    OCCLUSION = (1 << 10),
+    ALL = (1 << 11) - 1
   };
   DataMemberId TimeVarying = DataMemberId::NONE;
 
@@ -678,6 +699,10 @@ struct UsdBridgeMaterialData
   MaterialInput<float> Roughness = {0.5f, nullptr};
   MaterialInput<float> Metallic = {0.0, nullptr};
   MaterialInput<float> Ior = {1.0f, nullptr};
+  MaterialInput<float> Clearcoat = {0.0f, nullptr};
+  MaterialInput<float> ClearcoatRoughness = {0.0f, nullptr};
+  MaterialInput<UsdFloat3> Normal = {{ 0.0f, 0.0f, 1.0f }, nullptr}; // Only of use with a sampler
+  MaterialInput<float> Occlusion = {1.0f, nullptr}; // Only of use with a sampler
 };
 
 
@@ -731,6 +756,16 @@ struct UsdBridgeSamplerData
   WrapMode WrapS = WrapMode::BLACK;
   WrapMode WrapT = WrapMode::BLACK;
   WrapMode WrapR = WrapMode::BLACK;
+
+  // Factor between the color of the texels and the output of the sampler
+  float OutputScale = 1.0f;
+
+  // Transform of the texture coordinates of a 2D sampler: scale, then rotation
+  // (counterclockwise, in degrees), then translation
+  bool HasCoordTransform = false;
+  float CoordScale[2] = {1.0f, 1.0f};
+  float CoordRotation = 0.0f;
+  float CoordTranslation[2] = {0.0f, 0.0f};
 };
 
 struct UsdSamplerRefData
@@ -785,6 +820,31 @@ struct UsdBridgePointLightData : public UsdBridgeCommonLightData
   UsdFloat3 Position { 0.0, 0.0f, 0.0f };
   // Sphere radius in scene units. 0 means a true point source (no soft shadows).
   float Radius = 0.0f;
+
+  // Spot light: the cone of a UsdLuxShapingAPI around Direction, with ConeAngle its half
+  // angle in degrees and ConeSoftness the fraction of it over which the light falls off.
+  // A negative cone angle means the light shines in all directions.
+  UsdFloat3 Direction { 0.0f, 0.0f, -1.0f };
+  float ConeAngle = -1.0f;
+  float ConeSoftness = 0.0f;
+};
+
+struct UsdBridgeRectLightData : public UsdBridgeCommonLightData
+{
+  enum class DataMemberId : uint32_t
+  {
+    NONE = 0,
+    COLOR = (1 << 0),
+    INTENSITY = (1 << 1),
+    POSITION = (1 << 2),
+    ALL = (1 << 3) - 1
+  };
+  DataMemberId TimeVarying = DataMemberId::ALL;
+
+  // A corner and the two edges from it; the light is emitted towards cross(Edge1, Edge2).
+  UsdFloat3 Position { 0.0f, 0.0f, 0.0f };
+  UsdFloat3 Edge1 { 1.0f, 0.0f, 0.0f };
+  UsdFloat3 Edge2 { 0.0f, 1.0f, 0.0f };
 };
 
 struct UsdBridgeDomeLightData : public UsdBridgeCommonLightData
@@ -820,6 +880,11 @@ struct UsdBridgeCameraData
   float Far;
   float Fovy;
   float Height;
+
+  // Depth of field: radius of the lens in scene units (0 for a pinhole) and the distance
+  // of the plane which is in focus.
+  float ApertureRadius = 0.0f;
+  float FocusDistance = 1.0f;
 };
 
 template<class TEnum>
@@ -855,6 +920,7 @@ USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgeMaterialData);
 USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgeSamplerData);
 USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgeDirectionalLightData);
 USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgePointLightData);
+USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgeRectLightData);
 USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgeDomeLightData);
 USDBRIDGE_ENABLE_BITMASK_OP(UsdBridgeCameraData);
 

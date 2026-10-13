@@ -60,6 +60,13 @@ bool UsdSurface::deferCommit(UsdDevice* device)
   return false;
 }
 
+void UsdSurface::declareAttributeUse()
+{
+  const UsdSurfaceData& paramData = getReadParams();
+  if(paramData.geometry && paramData.material)
+    paramData.geometry->useAttributesAsTexCoords(paramData.material->getTexCoordAttributes());
+}
+
 bool UsdSurface::doCommitData(UsdDevice* device)
 {
   UsdBridge* usdBridge = device->getUsdBridge();
@@ -111,8 +118,11 @@ void UsdSurface::doCommitRefs(UsdDevice* device)
         updateBoundParameters = false;
       }
 
-      usdBridge->SetGeometryMaterialRef(usdHandle, 
-        paramData.geometry->getUsdHandle(), 
+      // What the material reads from this geometry has to be there before the two are bound
+      paramData.material->bakeTransformSamplers(paramData.geometry, device);
+
+      usdBridge->SetGeometryMaterialRef(usdHandle,
+paramData.geometry->getUsdHandle(), 
         paramData.material->getUsdHandle(), 
         worldTimeStep,
         selectRefTime(paramData.geometryRefTimeStep, geomObjTimeStep, worldTimeStep),

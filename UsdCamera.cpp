@@ -19,6 +19,8 @@ DEFINE_PARAMETER_MAP(UsdCamera,
   REGISTER_PARAMETER_MACRO("far", ANARI_FLOAT32, far)
   REGISTER_PARAMETER_MACRO("fovy", ANARI_FLOAT32, fovy)
   REGISTER_PARAMETER_MACRO("height", ANARI_FLOAT32, height)
+  REGISTER_PARAMETER_MACRO("apertureRadius", ANARI_FLOAT32, apertureRadius)
+  REGISTER_PARAMETER_MACRO("focusDistance", ANARI_FLOAT32, focusDistance)
 )
 
 constexpr UsdCamera::ComponentPair UsdCamera::componentParamNames[]; // Workaround for C++14's lack of inlining constexpr arrays
@@ -65,6 +67,8 @@ void UsdCamera::copyParameters(UsdBridgeCameraData& camData)
   camData.Far = paramData.far;
   camData.Fovy = paramData.fovy;
   camData.Height = paramData.height;
+  camData.ApertureRadius = paramData.apertureRadius;
+  camData.FocusDistance = paramData.focusDistance;
 
   camData.TimeVarying = DMI::ALL
     & (isTimeVarying(CType::VIEW) ? DMI::ALL : ~DMI::VIEW)

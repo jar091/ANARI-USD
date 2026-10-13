@@ -38,6 +38,13 @@ struct UsdLightData
   float angularDiameter = 0.0f;
   // ANARI point light parameter, sphere radius. Default 0 = true point source.
   float radius = 0.0f;
+  // ANARI spot light parameters, in radians: the full angle of the cone and the width of
+  // the falloff at its rim.
+  float openingAngle = float(M_PI);
+  float falloffAngle = 0.1f;
+  // ANARI quad light parameters: the edges from the corner at 'position'.
+  UsdFloat3 edge1 = {1.0f, 0.0f, 0.0f};
+  UsdFloat3 edge2 = {0.0f, 1.0f, 0.0f};
 };
 
 class UsdLight : public UsdBridgedBaseObject<UsdLight, UsdLightData, UsdLightHandle, UsdLightComponents>
@@ -72,6 +79,7 @@ class UsdLight : public UsdBridgedBaseObject<UsdLight, UsdLightData, UsdLightHan
 
     void CopyParameters(const UsdLightData& paramData, UsdBridgeDirectionalLightData& lightData);
     void CopyParameters(const UsdLightData& paramData,UsdBridgePointLightData& lightData);
+    void CopyParameters(const UsdLightData& paramData, UsdBridgeRectLightData& lightData);
     void CopyParameters(const UsdLightData& paramData, UsdBridgeDomeLightData& lightData);
 
     template<typename LightDataType>

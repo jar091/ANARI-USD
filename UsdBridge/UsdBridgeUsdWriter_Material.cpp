@@ -294,6 +294,10 @@ namespace
     CreateMaterialShaderInput<true>(shader, timeEval, DMI::OPACITY, SdfValueTypeNames->Float);
     CreateMaterialShaderInput<true>(shader, timeEval, DMI::METALLIC, SdfValueTypeNames->Float);
     CreateMaterialShaderInput<true>(shader, timeEval, DMI::IOR, SdfValueTypeNames->Float);
+    CreateMaterialShaderInput<true>(shader, timeEval, DMI::CLEARCOAT, SdfValueTypeNames->Float);
+    CreateMaterialShaderInput<true>(shader, timeEval, DMI::CLEARCOATROUGHNESS, SdfValueTypeNames->Float);
+    CreateMaterialShaderInput<true>(shader, timeEval, DMI::NORMAL, SdfValueTypeNames->Normal3f);
+    CreateMaterialShaderInput<true>(shader, timeEval, DMI::OCCLUSION, SdfValueTypeNames->Float);
 
     CreateShaderInput(shader, timeEval, DMI::OPACITY, UsdBridgeTokens->opacityThreshold, QualifiedInputTokens->opacityThreshold, SdfValueTypeNames->Float);
   }
@@ -655,7 +659,11 @@ namespace
       {
         if(uniformPrim) // Implies !timeEval, so initialize
         {
-          InitializePsAttributeReaderUniform(attributeReader);
+          // Until the primvar is known, the reader has the type of the input it is connected to
+          if(dataMemberId == DMI::DIFFUSE || dataMemberId == DMI::EMISSIVECOLOR)
+            InitializePsAttributeReaderUniform(attributeReader, UsdBridgeTokens->PrimVarReader_Float3, SdfValueTypeNames->Float3);
+          else
+            InitializePsAttributeReaderUniform(attributeReader);
         }
 
         // Create attribute reader varname, and if timeEval (manifest), can also remove the input
@@ -691,6 +699,11 @@ namespace
     INITIALIZE_ATTRIBUTE_READER_MACRO(matData.Roughness.SrcAttrib, DMI::ROUGHNESS);
     INITIALIZE_ATTRIBUTE_READER_MACRO(matData.Metallic.SrcAttrib, DMI::METALLIC);
     INITIALIZE_ATTRIBUTE_READER_MACRO(matData.Ior.SrcAttrib, DMI::IOR);
+    if(PreviewSurface)
+    {
+      INITIALIZE_ATTRIBUTE_READER_MACRO(matData.Clearcoat.SrcAttrib, DMI::CLEARCOAT);
+      INITIALIZE_ATTRIBUTE_READER_MACRO(matData.ClearcoatRoughness.SrcAttrib, DMI::CLEARCOATROUGHNESS);
+    }
   }
 
   void InitializeAttributeReaders_Impl(UsdStageRefPtr materialStage, const SdfPath& matPrimPath, const UsdBridgeSettings& settings,
@@ -995,7 +1008,17 @@ namespace
     DMI samplerDMI = samplerRefData.DataMemberId;
 
     const TfToken& inputToken = GetMaterialShaderInputToken<PreviewSurface>(samplerDMI);
-    const TfToken& outputToken = GetSamplerOutputColorToken<PreviewSurface>(samplerRefData.ImageNumComponents);
+    TfToken outputToken = GetSamplerOutputColorToken<PreviewSurface>(samplerRefData.ImageNumComponents);
+
+    // An input of one float takes the first channel of the texture, not its color
+    const bool colorInput = samplerDMI == DMI::DIFFUSE || samplerDMI == DMI::EMISSIVECOLOR || samplerDMI == DMI::NORMAL;
+    if(PreviewSurface && !colorInput)
+    {
+      outputToken = UsdBridgeTokens->r;
+      if(!refSampler.GetOutput(outputToken))
+        UsdShadeShader(refSampler.GetPrim()).CreateOutput(outputToken, SdfValueTypeNames->Float);
+    }
+
     UpdateShaderInput_ShadeNode<PreviewSurface>(uniformShader, timeVarShader, inputToken, refSampler, outputToken, conversionContext);
   }
 
@@ -1052,6 +1075,25 @@ namespace
       if((uint32_t)samplerData.Type >= (uint32_t)UsdBridgeSamplerData::SamplerType::SAMPLER_3D)
         SetShaderInput(uniformSamplerPrim, timeVarSamplerPrim, timeEval, UsdBridgeTokens->WrapR, DMI::WRAPR, TextureWrapToken(samplerData.WrapR));
 
+      // The type of the texels says whether they are sRGB encoded; without it a reader has to
+      // guess from the input which the texture is connected to
+      if(samplerData.Data)
+      {
+        static const TfToken colorSpaceToken("sourceColorSpace");
+        static const TfToken scaleToken("scale");
+        static const TfToken srgbToken("sRGB");
+        static const TfToken rawToken("raw");
+
+        const bool srgbTexels = ubutils::UsdBridgeTypeFlatten(samplerData.DataType) == UsdBridgeType::UCHAR_SRGB_R;
+        uniformSamplerPrim.CreateInput(colorSpaceToken, SdfValueTypeNames->Token).Set(srgbTexels ? srgbToken : rawToken);
+
+        const float scale = samplerData.OutputScale;
+        if(scale != 1.0f)
+          uniformSamplerPrim.CreateInput(scaleToken, SdfValueTypeNames->Float4).Set(GfVec4f(scale, scale, scale, 1.0f));
+        else
+          uniformSamplerPrim.GetPrim().RemoveProperty(TfToken("inputs:scale"));
+      }
+
       // Check whether the output type is still correct
       // (Experimental: assume the output type doesn't change over time, this just gives it a chance to match the image type)
       int numComponents = samplerData.ImageNumComponents;
@@ -1064,6 +1106,38 @@ namespace
         uniformSamplerPrim.GetPrim().RemoveProperty(QualifiedOutputTokens->rgb);
 
         uniformSamplerPrim.CreateOutput(outputToken, GetSamplerOutputColorType<true>(numComponents));
+      }
+
+      // A transform of the texture coordinates is a node between their reader and the texture
+      if(samplerData.Type == UsdBridgeSamplerData::SamplerType::SAMPLER_2D)
+      {
+        static const TfToken transformIdToken("UsdTransform2d");
+        static const TfToken transformInToken("in");
+        static const TfToken transformScaleToken("scale");
+        static const TfToken transformRotationToken("rotation");
+        static const TfToken transformTranslationToken("translation");
+
+        SdfPath tcTransformPrimPath = samplerPrimPath.AppendPath(SdfPath("texcoordtransform"));
+        UsdShadeOutput coordOutput = uniformTcReaderPrim.GetOutput(UsdBridgeTokens->result);
+        if(samplerData.HasCoordTransform)
+        {
+          UsdShadeShader tcTransform = UsdShadeShader::Define(sceneStage, tcTransformPrimPath);
+          tcTransform.CreateIdAttr(VtValue(transformIdToken));
+          tcTransform.CreateInput(transformInToken, SdfValueTypeNames->Float2).ConnectToSource(coordOutput);
+          tcTransform.CreateInput(transformScaleToken, SdfValueTypeNames->Float2).Set(
+            GfVec2f(samplerData.CoordScale[0], samplerData.CoordScale[1]));
+          tcTransform.CreateInput(transformRotationToken, SdfValueTypeNames->Float).Set(samplerData.CoordRotation);
+          tcTransform.CreateInput(transformTranslationToken, SdfValueTypeNames->Float2).Set(
+            GfVec2f(samplerData.CoordTranslation[0], samplerData.CoordTranslation[1]));
+          coordOutput = tcTransform.CreateOutput(UsdBridgeTokens->result, SdfValueTypeNames->Float2);
+        }
+        else if(sceneStage->GetPrimAtPath(tcTransformPrimPath))
+        {
+          sceneStage->RemovePrim(tcTransformPrimPath);
+        }
+
+        if(coordOutput)
+          uniformSamplerPrim.GetInput(UsdBridgeTokens->st).ConnectToSource(coordOutput);
       }
     }
     else
@@ -1228,6 +1302,14 @@ void UsdBridgeUsdWriter::ConnectSamplersToMaterial(UsdStageRefPtr materialStage,
 
       UpdateShaderInput_Sampler<true>(uniformShad, timeVarShad, refSampler, samplerRefDatas[i], conversionContext);
 
+      // The texels of a normal map are the normal in the range [0, 1], which the preview surface
+      // takes in [-1, 1]
+      if(samplerRefDatas[i].DataMemberId == DMI::NORMAL)
+      {
+        refSampler.CreateInput(TfToken("scale"), SdfValueTypeNames->Float4).Set(GfVec4f(2.0f, 2.0f, 2.0f, 1.0f));
+        refSampler.CreateInput(TfToken("bias"), SdfValueTypeNames->Float4).Set(GfVec4f(-1.0f, -1.0f, -1.0f, 0.0f));
+      }
+
       bool affectsOpacity = samplerRefDatas[i].DataMemberId == DMI::DIFFUSE && samplerRefDatas[i].ImageNumComponents == 4;
       if(affectsOpacity)
         UpdateShaderInputColorOpacity_Sampler<true>(uniformShad, timeVarShad, refSampler, conversionContext);
@@ -1257,7 +1339,8 @@ void UsdBridgeUsdWriter::ConnectSamplersToMaterial(UsdStageRefPtr materialStage,
       ShadeGraphTypeConversionNodeContext conversionContext(
         this->SceneStage, matPrimPath, samplerPrimName);
 
-      if(samplerRefDatas[i].DataMemberId != DMI::OPACITY)
+      const bool previewSurfaceOnly = static_cast<uint32_t>(samplerRefDatas[i].DataMemberId) >= static_cast<uint32_t>(DMI::CLEARCOAT);
+      if(samplerRefDatas[i].DataMemberId != DMI::OPACITY && !previewSurfaceOnly)
       {
         UpdateShaderInput_Sampler<false>(uniformShad, timeVarShad, refSampler, samplerRefDatas[i], conversionContext);
 
@@ -1329,6 +1412,11 @@ void UsdBridgeUsdWriter::UpdatePsShader(UsdStageRefPtr timeVarStage, const SdfPa
   UPDATE_USD_SHADER_INPUT_MACRO(DMI::OPACITY, matData.Opacity);
   UPDATE_USD_SHADER_INPUT_MACRO(DMI::METALLIC, matData.Metallic);
   UPDATE_USD_SHADER_INPUT_MACRO(DMI::IOR, matData.Ior);
+  UPDATE_USD_SHADER_INPUT_MACRO(DMI::CLEARCOAT, matData.Clearcoat);
+  UPDATE_USD_SHADER_INPUT_MACRO(DMI::CLEARCOATROUGHNESS, matData.ClearcoatRoughness);
+  UPDATE_USD_SHADER_INPUT_MACRO(DMI::OCCLUSION, matData.Occlusion);
+  GfVec3f normalValue(GetValuePtr(matData.Normal));
+  UPDATE_USD_SHADER_INPUT_MACRO(DMI::NORMAL, matData.Normal, normalValue);
 
   // Just a value, not connected to attribreaders or samplers
   float opacityCutoffValue = (matData.AlphaMode == UsdBridgeMaterialData::AlphaModes::MASK) ? matData.AlphaCutoff : 0.0f; // don't enable cutoff when not explicitly specified
@@ -1463,9 +1551,16 @@ void UsdBridgeUsdWriter::UpdateUsdSampler(UsdStageRefPtr timeVarStage, UsdBridge
       {
         StbWriteOutput writeOutput;
 
+        // The first row of an ANARI image lies at the origin of the texture coordinates, which
+        // is the bottom of an image in USD: the rows are written last to first.
+        const int numRows = static_cast<int>(samplerData.ImageDims[1]);
+        const int rowStride = static_cast<int>(convertedSamplerStride);
+        const unsigned char* lastRow = static_cast<const unsigned char*>(convertedSamplerData)
+          + static_cast<size_t>(numRows > 0 ? numRows - 1 : 0) * rowStride;
+
         stbi_write_png_to_func(StbWriteToBuffer, &writeOutput,
-          static_cast<int>(samplerData.ImageDims[0]), static_cast<int>(samplerData.ImageDims[1]),
-          numComponents, convertedSamplerData, convertedSamplerStride);
+          static_cast<int>(samplerData.ImageDims[0]), numRows,
+          numComponents, lastRow, -rowStride);
 
         // Filename, relative from connection working dir
         std::string wdRelFilename(SessionDirectory + imgFileName);

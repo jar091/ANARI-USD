@@ -117,26 +117,78 @@ endif()
 # through pxrTargets, so disable USD's config-mode lookup, as is done for TBB above.
 set(PXR_FIND_OPENSUBDIV_IN_CONFIG OFF)
 
-# Search in config mode (USD will now skip TBB finding and use the targets defined above)
-find_package(pxr REQUIRED
-  HINTS ${USD_ROOT_DIR_CURRENT})
-
-if(NOT (USD_ROOT_DIR_DEBUG STREQUAL USD_ROOT_DIR_RELEASE))
-  set(USD_DEBUG_TARGET_CMAKE "${USD_ROOT_DIR_DEBUG}/cmake/pxrTargets-debug.cmake")
-  if(EXISTS ${USD_DEBUG_TARGET_CMAKE})
-    set(_IMPORT_PREFIX ${USD_ROOT_DIR_DEBUG})
-    #include USD debug cmake targets
-    include(${USD_DEBUG_TARGET_CMAKE})
-    set(_IMPORT_PREFIX)
+# Blender bundles a monolithic USD library, but its pxrConfig package references
+# build-machine paths and development dependencies omitted from the bundle.
+# Import the monolithic library directly instead of its component targets.
+option(USD_DEVICE_USE_MONOLITHIC "Link the monolithic USD library without loading pxrConfig" OFF)
+if(USD_DEVICE_USE_MONOLITHIC)
+  find_library(USD_MONOLITHIC_LIBRARY_RELEASE
+    NAMES usd_ms usd_usd_ms
+    PATHS "${USD_ROOT_DIR_RELEASE}/lib" NO_DEFAULT_PATH REQUIRED)
+  find_library(USD_MONOLITHIC_LIBRARY_DEBUG
+    NAMES usd_ms_d usd_usd_ms_d
+    PATHS "${USD_ROOT_DIR_DEBUG}/lib" NO_DEFAULT_PATH)
+  if(NOT TARGET TBB::tbb)
+    find_package(TBB REQUIRED COMPONENTS tbb)
   endif()
-endif()
+  add_library(UsdBridge_usd_monolithic SHARED IMPORTED)
+  set_target_properties(UsdBridge_usd_monolithic PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${USD_ROOT_DIR_CURRENT}/include"
+    INTERFACE_LINK_LIBRARIES "TBB::tbb;Python3::Python")
+  if(WIN32)
+    get_filename_component(USD_MONOLITHIC_NAME "${USD_MONOLITHIC_LIBRARY_RELEASE}" NAME_WE)
+    find_file(USD_MONOLITHIC_RUNTIME_RELEASE
+      NAMES "${USD_MONOLITHIC_NAME}.dll"
+      PATHS "${USD_ROOT_DIR_RELEASE}/lib" "${USD_ROOT_DIR_RELEASE}/bin"
+      NO_DEFAULT_PATH REQUIRED)
+    set_target_properties(UsdBridge_usd_monolithic PROPERTIES
+      IMPORTED_IMPLIB "${USD_MONOLITHIC_LIBRARY_RELEASE}"
+      IMPORTED_LOCATION "${USD_MONOLITHIC_RUNTIME_RELEASE}")
+    if(USD_MONOLITHIC_LIBRARY_DEBUG)
+      get_filename_component(USD_MONOLITHIC_NAME "${USD_MONOLITHIC_LIBRARY_DEBUG}" NAME_WE)
+      find_file(USD_MONOLITHIC_RUNTIME_DEBUG
+        NAMES "${USD_MONOLITHIC_NAME}.dll"
+        PATHS "${USD_ROOT_DIR_DEBUG}/lib" "${USD_ROOT_DIR_DEBUG}/bin"
+        NO_DEFAULT_PATH REQUIRED)
+      set_target_properties(UsdBridge_usd_monolithic PROPERTIES
+        IMPORTED_IMPLIB_DEBUG "${USD_MONOLITHIC_LIBRARY_DEBUG}"
+        IMPORTED_LOCATION_DEBUG "${USD_MONOLITHIC_RUNTIME_DEBUG}")
+    endif()
+  else()
+    set_target_properties(UsdBridge_usd_monolithic PROPERTIES
+      IMPORTED_LOCATION "${USD_MONOLITHIC_LIBRARY_RELEASE}")
+    if(USD_MONOLITHIC_LIBRARY_DEBUG)
+      set_target_properties(UsdBridge_usd_monolithic PROPERTIES
+        IMPORTED_LOCATION_DEBUG "${USD_MONOLITHIC_LIBRARY_DEBUG}")
+    endif()
+  endif()
+  set(USD_TARGETS UsdBridge_usd_monolithic)
+  if(USD_DEVICE_RENDERING_ENABLED)
+    find_package(OpenGL REQUIRED)
+    target_link_libraries(UsdBridge_usd_monolithic INTERFACE OpenGL::GL)
+  endif()
+else()
+  # Search in config mode (USD will now skip TBB finding and use the targets defined above)
+  find_package(pxr REQUIRED
+    HINTS ${USD_ROOT_DIR_CURRENT})
 
-list(APPEND USD_INIT_TARGETS usdGeom usdVol usdShade usdLux usdUtils plug usdRender)
-if(${USD_DEVICE_RENDERING_ENABLED})
-  find_package(OpenGL REQUIRED)
-  list(APPEND USD_INIT_TARGETS usdHydra usdImaging hgi hdx glf usdImagingGL)
+  if(NOT (USD_ROOT_DIR_DEBUG STREQUAL USD_ROOT_DIR_RELEASE))
+    set(USD_DEBUG_TARGET_CMAKE "${USD_ROOT_DIR_DEBUG}/cmake/pxrTargets-debug.cmake")
+    if(EXISTS ${USD_DEBUG_TARGET_CMAKE})
+      set(_IMPORT_PREFIX ${USD_ROOT_DIR_DEBUG})
+      #include USD debug cmake targets
+      include(${USD_DEBUG_TARGET_CMAKE})
+      set(_IMPORT_PREFIX)
+    endif()
+  endif()
+
+  list(APPEND USD_INIT_TARGETS usdGeom usdVol usdShade usdLux usdUtils plug usdRender)
+  if(${USD_DEVICE_RENDERING_ENABLED})
+    find_package(OpenGL REQUIRED)
+    list(APPEND USD_INIT_TARGETS usdHydra usdImaging hgi hdx glf usdImagingGL)
+  endif()
+  flatten_and_cleanup_targets(USD_TARGETS "${USD_INIT_TARGETS}")
 endif()
-flatten_and_cleanup_targets(USD_TARGETS "${USD_INIT_TARGETS}")
 message(STATUS "USD_TARGETS: ${USD_TARGETS}")
 
 # Find out whether USD was compiled with or without the CXX11 ABI

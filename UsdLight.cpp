@@ -21,6 +21,10 @@ DEFINE_PARAMETER_MAP(UsdLight,
   REGISTER_PARAMETER_MACRO("radiance", ANARI_FLOAT32, radiance)
   REGISTER_PARAMETER_MACRO("angularDiameter", ANARI_FLOAT32, angularDiameter)
   REGISTER_PARAMETER_MACRO("radius", ANARI_FLOAT32, radius)
+  REGISTER_PARAMETER_MACRO("openingAngle", ANARI_FLOAT32, openingAngle)
+  REGISTER_PARAMETER_MACRO("falloffAngle", ANARI_FLOAT32, falloffAngle)
+  REGISTER_PARAMETER_MACRO("edge1", ANARI_FLOAT32_VEC3, edge1)
+  REGISTER_PARAMETER_MACRO("edge2", ANARI_FLOAT32_VEC3, edge2)
 )
 
 namespace
@@ -33,24 +37,26 @@ namespace
       lightType = UsdBridgeLightType::DIRECTIONAL;
     else if (strEquals(type, "point"))
       lightType = UsdBridgeLightType::POINT;
+    else if (strEquals(type, "spot"))
+      lightType = UsdBridgeLightType::SPOT;
+    else if (strEquals(type, "quad"))
+      lightType = UsdBridgeLightType::QUAD;
     else
       lightType = UsdBridgeLightType::DOME;
 
     return lightType;
   }
 
-  // Maximum photopic luminous efficacy: 1 W of "photopic-equivalent" radiant
-  // flux corresponds to 683 lumens. ANARI carries no spectral information,
-  // so this single constant is the radiometric->photometric bridge for all
-  // light types and is consistent with treating each color channel as a
-  // luminance carrier. With inputs:normalize=true on the UsdLuxLight, this
-  // makes the authored intensity directly comparable across light types:
-  //   - DistantLight: lux  (illuminance,    lm/m^2)
-  //   - SphereLight:  cd   (luminous intensity, lm/sr)
-  //   - DomeLight:    nits (luminance,     cd/m^2)
-  // Real-world reference values: midday sun ~1e5 lux, candle flame ~1 cd,
-  // bright laptop screen ~5e2 nits.
-  constexpr float LUMINOUS_EFFICACY_LM_PER_W = 683.0f;
+  // UsdLux and ANARI both describe light radiometrically, so quantities pass through without
+  // a photometric factor. With inputs:normalize=true on the UsdLuxLight, the authored
+  // intensity is the radiance of a light of unit size, which makes it for a
+  //   - DistantLight: its irradiance (W/m^2)
+  //   - SphereLight:  4 times its radiant intensity (W/sr): the radiance L of a sphere of
+  //                   radius r is intensity / (4 pi r^2), and it shows a disk of pi r^2
+  //   - RectLight:    its radiance times its area, the intensity along its normal (W/sr)
+  //   - DomeLight:    its radiance (W/sr/m^2)
+  // In each case but the last, pi times the intensity is the emitted power per unit of
+  // the measure which the light is normalized by.
 
   // Decompose an RGB color into chromaticity (in [0,1]) and a positive
   // magnitude (the max channel). The magnitude is folded into the light
@@ -133,7 +139,7 @@ void UsdLight::CopyParameters(const UsdLightData& paramData, UsdBridgeDirectiona
   UsdFloat3 chroma; float colorMag = 1.0f;
   splitColor(paramData.color, chroma, colorMag);
 
-  const float magnitude = radiometric * colorMag * LUMINOUS_EFFICACY_LM_PER_W;
+  const float magnitude = radiometric * colorMag;
   splitIntensityExposure(magnitude, lightData.Intensity, lightData.Exposure);
 
   lightData.Color = chroma;
@@ -167,7 +173,29 @@ void UsdLight::CopyParameters(const UsdLightData& paramData,UsdBridgePointLightD
   UsdFloat3 chroma; float colorMag = 1.0f;
   splitColor(paramData.color, chroma, colorMag);
 
-  const float magnitude = radiometric * colorMag * LUMINOUS_EFFICACY_LM_PER_W;
+  if(lightType == UsdBridgeLightType::SPOT)
+  {
+    // ANARI spreads the power of a spot light over the solid angle of its cone
+    const float halfAngle = std::min(std::max(0.5f * paramData.openingAngle, 0.0f), float(M_PI));
+    if(paramData.intensity == -1.0f && paramData.power != -1.0f)
+    {
+      const float solidAngle = 2.0f * float(M_PI) * (1.0f - std::cos(halfAngle));
+      radiometric = solidAngle > 0.0f ? paramData.power / solidAngle : 0.0f;
+    }
+
+    lightData.Direction = paramData.direction;
+    lightData.ConeAngle = halfAngle * (180.0f / float(M_PI));
+    // The softness is the part of the cone over which the light falls off, measured in
+    // the cosine of the angle to the axis, as renderers evaluate it
+    const float cosOuter = std::cos(halfAngle);
+    const float cosInner = std::cos(std::max(halfAngle - std::max(paramData.falloffAngle, 0.0f), 0.0f));
+    lightData.ConeSoftness = cosOuter < 1.0f
+      ? std::min(std::max((cosInner - cosOuter) / (1.0f - cosOuter), 0.0f), 1.0f)
+      : 0.0f;
+  }
+
+  // Four times the intensity, see the note on units above
+  const float magnitude = 4.0f * radiometric * colorMag;
   splitIntensityExposure(magnitude, lightData.Intensity, lightData.Exposure);
 
   lightData.Color = chroma;
@@ -180,6 +208,47 @@ void UsdLight::CopyParameters(const UsdLightData& paramData,UsdBridgePointLightD
         ? DMI::ALL : ~DMI::INTENSITY)
     & (isTimeVarying(CType::POSITION) ? DMI::ALL : ~DMI::POSITION)
     & (isTimeVarying(CType::RADIUS) ? DMI::ALL : ~DMI::RADIUS);
+}
+
+void UsdLight::CopyParameters(const UsdLightData& paramData, UsdBridgeRectLightData& lightData)
+{
+  typedef UsdBridgeRectLightData::DataMemberId DMI;
+
+  const UsdFloat3& e1 = paramData.edge1;
+  const UsdFloat3& e2 = paramData.edge2;
+  const float cross[3] = {
+    e1.Data[1]*e2.Data[2] - e1.Data[2]*e2.Data[1],
+    e1.Data[2]*e2.Data[0] - e1.Data[0]*e2.Data[2],
+    e1.Data[0]*e2.Data[1] - e1.Data[1]*e2.Data[0]};
+  const float area = std::sqrt(cross[0]*cross[0] + cross[1]*cross[1] + cross[2]*cross[2]);
+
+  // ANARI 1.x KHR_LIGHT_QUAD: 'radiance' (W/sr/m^2), 'intensity' along the normal (W/sr),
+  // or the 'power' (W) of the one-sided diffuse emitter. The normalized rect light takes
+  // the intensity along the normal, see the note on units above.
+  float radiometric = area;
+  if (paramData.radiance != -1.0f)
+    radiometric = paramData.radiance * area;
+  else if (paramData.intensity != -1.0f)
+    radiometric = paramData.intensity;
+  else if (paramData.power != -1.0f)
+    radiometric = paramData.power / float(M_PI);
+
+  UsdFloat3 chroma; float colorMag = 1.0f;
+  splitColor(paramData.color, chroma, colorMag);
+
+  const float magnitude = radiometric * colorMag;
+  splitIntensityExposure(magnitude, lightData.Intensity, lightData.Exposure);
+
+  lightData.Color = chroma;
+  lightData.Position = paramData.position;
+  lightData.Edge1 = paramData.edge1;
+  lightData.Edge2 = paramData.edge2;
+
+  lightData.TimeVarying = DMI::ALL
+    & (isTimeVarying(CType::COLOR) ? DMI::ALL : ~DMI::COLOR)
+    & ((isTimeVarying(CType::INTENSITY) || isTimeVarying(CType::POWER) || isTimeVarying(CType::RADIANCE))
+        ? DMI::ALL : ~DMI::INTENSITY)
+    & (isTimeVarying(CType::POSITION) ? DMI::ALL : ~DMI::POSITION);
 }
 
 void UsdLight::CopyParameters(const UsdLightData& paramData, UsdBridgeDomeLightData& lightData)
@@ -197,7 +266,7 @@ void UsdLight::CopyParameters(const UsdLightData& paramData, UsdBridgeDomeLightD
   UsdFloat3 chroma; float colorMag = 1.0f;
   splitColor(paramData.color, chroma, colorMag);
 
-  const float magnitude = radiometric * colorMag * LUMINOUS_EFFICACY_LM_PER_W;
+  const float magnitude = radiometric * colorMag;
   splitIntensityExposure(magnitude, lightData.Intensity, lightData.Exposure);
 
   lightData.Color = chroma;
@@ -237,7 +306,9 @@ bool UsdLight::doCommitData(UsdDevice* device)
     switch(lightType)
     {
       case UsdBridgeLightType::DIRECTIONAL: SetLightData<UsdBridgeDirectionalLightData>(usdBridge, usdHandle, paramData, timeStep); break;
-      case UsdBridgeLightType::POINT: SetLightData<UsdBridgePointLightData>(usdBridge, usdHandle, paramData, timeStep); break;
+      case UsdBridgeLightType::POINT:
+      case UsdBridgeLightType::SPOT: SetLightData<UsdBridgePointLightData>(usdBridge, usdHandle, paramData, timeStep); break;
+      case UsdBridgeLightType::QUAD: SetLightData<UsdBridgeRectLightData>(usdBridge, usdHandle, paramData, timeStep); break;
       case UsdBridgeLightType::DOME: SetLightData<UsdBridgeDomeLightData>(usdBridge, usdHandle, paramData, timeStep); break;
       default: break;
     }

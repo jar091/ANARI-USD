@@ -70,6 +70,9 @@ public:
       bridgeSettings.ParallelController = mpiController.get();
     }
 
+    bridgeSettings.UpAxis = UsdSharedString::c_str(deviceParams.upAxis);
+    bridgeSettings.MetersPerUnit = deviceParams.metersPerUnit;
+
     bridge = std::make_unique<UsdBridge>(bridgeSettings);
 
     bridge->SetExternalSceneStage(externalSceneStage);
@@ -115,12 +118,15 @@ DEFINE_PARAMETER_MAP(UsdDevice,
   REGISTER_PARAMETER_MACRO("usd::output.previewSurfaceShader", ANARI_BOOL, outputPreviewSurfaceShader)
   REGISTER_PARAMETER_MACRO("usd::output.mdlShader", ANARI_BOOL, outputMdlShader)
   REGISTER_PARAMETER_MACRO("usd::output.displayColorOpacity", ANARI_BOOL, useDisplayColorOpacity)
+  REGISTER_PARAMETER_MACRO("usd::stage.upAxis", ANARI_STRING, upAxis)
+  REGISTER_PARAMETER_MACRO("usd::stage.metersPerUnit", ANARI_FLOAT32, metersPerUnit)
 )
 
 void UsdDevice::clearDeviceParameters()
 {
   filterResetParam("usd::serialize.hostName");
   filterResetParam("usd::serialize.location");
+  filterResetParam("usd::stage.upAxis");
   transferWriteToReadParams();
 }
 //----
@@ -283,7 +289,7 @@ void UsdDevice::filterSetParam(
   }
   else if (strEquals(name, "statusCallback") && type == ANARI_STATUS_CALLBACK)
   {
-    userSetStatusFunc = (ANARIStatusCallback)mem;
+    userSetStatusFunc = mem ? *static_cast<const ANARIStatusCallback*>(mem) : nullptr;
   }
   else if (strEquals(name, "statusCallbackUserData") && type == ANARI_VOID_POINTER)
   {
@@ -729,6 +735,14 @@ void UsdDevice::clearCommitList()
 void UsdDevice::flushCommitList()
 {
   lockCommitList = true;
+
+  // A geometry is written before the surfaces it is part of: what their materials read from
+  // it is collected first
+  for(auto objCommitPair : commitList)
+  {
+    if(objCommitPair.first->getType() == ANARI_SURFACE)
+      reinterpret_cast<UsdSurface*>(objCommitPair.first.ptr)->declareAttributeUse();
+  }
 
   writeTypeToUsd<(int)ANARI_SAMPLER>();
 

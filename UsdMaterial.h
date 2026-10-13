@@ -45,6 +45,10 @@ struct UsdMaterialData
   UsdMaterialMultiTypeParameter<float> roughness = {0.5f, ANARI_FLOAT32};
   UsdMaterialMultiTypeParameter<float> metallic = {0.0f, ANARI_FLOAT32};
   UsdMaterialMultiTypeParameter<float> ior = {1.0f, ANARI_FLOAT32};
+  UsdMaterialMultiTypeParameter<float> clearcoat = {0.0f, ANARI_FLOAT32};
+  UsdMaterialMultiTypeParameter<float> clearcoatRoughness = {0.0f, ANARI_FLOAT32};
+  UsdMaterialMultiTypeParameter<UsdFloat3> normal = {{ 0.0f, 0.0f, 1.0f }, ANARI_FLOAT32_VEC3}; // Only of use with a sampler
+  UsdMaterialMultiTypeParameter<float> occlusion = {1.0f, ANARI_FLOAT32}; // Only of use with a sampler
 
   double colorSamplerTimeStep = std::numeric_limits<float>::quiet_NaN();
   double opacitySamplerTimeStep = std::numeric_limits<float>::quiet_NaN();
@@ -97,6 +101,14 @@ class UsdMaterial : public UsdBridgedBaseObject<UsdMaterial, UsdMaterialData, Us
       bool useDisplayColorOpacity,
       const UsdLogInfo& logInfo);
 
+  public:
+    // Writes the output of the transform samplers of this material for a geometry it is bound to
+    void bakeTransformSamplers(UsdGeometry* geometry, UsdDevice* device);
+
+    // Bit i is set if an image sampler of this material takes its texture coordinates from attribute i
+    uint32_t getTexCoordAttributes() const;
+
+  protected:
     bool deferCommit(UsdDevice* device) override;
     bool doCommitData(UsdDevice* device) override;
     void doCommitRefs(UsdDevice* device) override;

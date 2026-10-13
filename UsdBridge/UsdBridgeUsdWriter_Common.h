@@ -357,6 +357,26 @@ namespace
     return result;
   }
 
+  // Inputs of the preview surface which are not in the token lists above: those are as long
+  // as the preprocessor of some compilers allows them to be
+  struct PreviewSurfaceExtraTokenSet
+  {
+    const TfToken clearcoat{"clearcoat"};
+    const TfToken clearcoatRoughness{"clearcoatRoughness"};
+    const TfToken normal{"normal"};
+    const TfToken occlusion{"occlusion"};
+    const TfToken inputsClearcoat{"inputs:clearcoat"};
+    const TfToken inputsClearcoatRoughness{"inputs:clearcoatRoughness"};
+    const TfToken inputsNormal{"inputs:normal"};
+    const TfToken inputsOcclusion{"inputs:occlusion"};
+  };
+
+  inline const PreviewSurfaceExtraTokenSet& PreviewSurfaceExtraTokens()
+  {
+    static const PreviewSurfaceExtraTokenSet tokens;
+    return tokens;
+  }
+
   template<bool PreviewSurface>
   const TfToken& GetMaterialShaderInputToken(UsdBridgeMaterialData::DataMemberId dataMemberId)
   {
@@ -371,7 +391,11 @@ namespace
         case DMI::EMISSIVECOLOR: { return UsdBridgeTokens->emissiveColor; break; } 
         case DMI::ROUGHNESS: { return UsdBridgeTokens->roughness; break; } 
         case DMI::METALLIC: { return UsdBridgeTokens->metallic; break; } 
-        case DMI::IOR: { return UsdBridgeTokens->ior; break; } 
+        case DMI::IOR: { return UsdBridgeTokens->ior; break; }
+        case DMI::CLEARCOAT: { return PreviewSurfaceExtraTokens().clearcoat; break; }
+        case DMI::CLEARCOATROUGHNESS: { return PreviewSurfaceExtraTokens().clearcoatRoughness; break; }
+        case DMI::NORMAL: { return PreviewSurfaceExtraTokens().normal; break; }
+        case DMI::OCCLUSION: { return PreviewSurfaceExtraTokens().occlusion; break; }
 
         default: assert(false); break;
       };
@@ -386,7 +410,12 @@ namespace
         case DMI::EMISSIVEINTENSITY: { return UsdBridgeTokens->emissive_intensity; break; } 
         case DMI::ROUGHNESS: { return UsdBridgeTokens->reflection_roughness_constant; break; } 
         case DMI::METALLIC: { return UsdBridgeTokens->metallic_constant; break; } 
-        case DMI::IOR: { return UsdBridgeTokens->ior_constant; break; } 
+        case DMI::IOR: { return UsdBridgeTokens->ior_constant; break; }
+        // Not inputs of OmniPBR, and never created on it
+        case DMI::CLEARCOAT: { return PreviewSurfaceExtraTokens().clearcoat; break; }
+        case DMI::CLEARCOATROUGHNESS: { return PreviewSurfaceExtraTokens().clearcoatRoughness; break; }
+        case DMI::NORMAL: { return PreviewSurfaceExtraTokens().normal; break; }
+        case DMI::OCCLUSION: { return PreviewSurfaceExtraTokens().occlusion; break; }
 
         default: assert(false); break;
       };
@@ -410,6 +439,10 @@ namespace
         case DMI::ROUGHNESS: { return QualifiedInputTokens->roughness; break; }
         case DMI::METALLIC: { return QualifiedInputTokens->metallic; break; }
         case DMI::IOR: { return QualifiedInputTokens->ior; break; }
+        case DMI::CLEARCOAT: { return PreviewSurfaceExtraTokens().inputsClearcoat; break; }
+        case DMI::CLEARCOATROUGHNESS: { return PreviewSurfaceExtraTokens().inputsClearcoatRoughness; break; }
+        case DMI::NORMAL: { return PreviewSurfaceExtraTokens().inputsNormal; break; }
+        case DMI::OCCLUSION: { return PreviewSurfaceExtraTokens().inputsOcclusion; break; }
 
         default: assert(false); break;
       };
@@ -425,6 +458,10 @@ namespace
         case DMI::ROUGHNESS: { return QualifiedInputTokens->reflection_roughness_constant; break; }
         case DMI::METALLIC: { return QualifiedInputTokens->metallic_constant; break; }
         case DMI::IOR: { return QualifiedInputTokens->ior_constant; break; }
+        case DMI::CLEARCOAT: { return PreviewSurfaceExtraTokens().inputsClearcoat; break; }
+        case DMI::CLEARCOATROUGHNESS: { return PreviewSurfaceExtraTokens().inputsClearcoatRoughness; break; }
+        case DMI::NORMAL: { return PreviewSurfaceExtraTokens().inputsNormal; break; }
+        case DMI::OCCLUSION: { return PreviewSurfaceExtraTokens().inputsOcclusion; break; }
 
         default: assert(false); break;
       };
@@ -453,6 +490,10 @@ namespace
     const char* const roughnessAttribReaderPrimPf_mdl = "roughnessattribreader_mdl";
     const char* const metallicAttribReaderPrimPf_mdl = "metallicattribreader_mdl";
     const char* const iorAttribReaderPrimPf_mdl = "iorattribreader_mdl";
+    const char* const clearcoatAttribReaderPrimPf = "clearcoatattribreader";
+    const char* const clearcoatRoughnessAttribReaderPrimPf = "clearcoatroughnessattribreader";
+    const char* const normalAttribReaderPrimPf = "normalattribreader";
+    const char* const occlusionAttribReaderPrimPf = "occlusionattribreader";
 
     const char* result = nullptr;
     if(PreviewSurface)
@@ -465,7 +506,11 @@ namespace
         case DMI::EMISSIVEINTENSITY: { result = emissiveIntensityAttribReaderPrimPf_ps; break; } 
         case DMI::ROUGHNESS: { result = roughnessAttribReaderPrimPf_ps; break; } 
         case DMI::METALLIC: { result = metallicAttribReaderPrimPf_ps; break; } 
-        case DMI::IOR: { result = iorAttribReaderPrimPf_ps; break; } 
+        case DMI::IOR: { result = iorAttribReaderPrimPf_ps; break; }
+        case DMI::CLEARCOAT: { result = clearcoatAttribReaderPrimPf; break; }
+        case DMI::CLEARCOATROUGHNESS: { result = clearcoatRoughnessAttribReaderPrimPf; break; }
+        case DMI::NORMAL: { result = normalAttribReaderPrimPf; break; }
+        case DMI::OCCLUSION: { result = occlusionAttribReaderPrimPf; break; }
 
         default: assert(false); break;
       };
@@ -480,7 +525,11 @@ namespace
         case DMI::EMISSIVEINTENSITY: { result = emissiveIntensityAttribReaderPrimPf_mdl; break; } 
         case DMI::ROUGHNESS: { result = roughnessAttribReaderPrimPf_mdl; break; } 
         case DMI::METALLIC: { result = metallicAttribReaderPrimPf_mdl; break; } 
-        case DMI::IOR: { result = iorAttribReaderPrimPf_mdl; break; } 
+        case DMI::IOR: { result = iorAttribReaderPrimPf_mdl; break; }
+        case DMI::CLEARCOAT: { result = clearcoatAttribReaderPrimPf; break; }
+        case DMI::CLEARCOATROUGHNESS: { result = clearcoatRoughnessAttribReaderPrimPf; break; }
+        case DMI::NORMAL: { result = normalAttribReaderPrimPf; break; }
+        case DMI::OCCLUSION: { result = occlusionAttribReaderPrimPf; break; }
 
         default: assert(false); break;
       };

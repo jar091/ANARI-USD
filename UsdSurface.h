@@ -36,6 +36,9 @@ class UsdSurface : public UsdBridgedBaseObject<UsdSurface, UsdSurfaceData, UsdSu
 
     bool isInstanceable() const;
 
+    // Tells the geometry what the material reads from it; called before either is written
+    void declareAttributeUse();
+
   protected:
     bool deferCommit(UsdDevice* device) override;
     bool doCommitData(UsdDevice* device) override;
