@@ -8,6 +8,7 @@
 #include "UsdDataArray.h"
 #include "UsdGeometry.h"
 
+#include <algorithm>
 #include <type_traits>
 
 #define SamplerType ANARI_SAMPLER
@@ -151,7 +152,8 @@ bool UsdMaterial::getSamplerRefData(const UsdMaterialMultiTypeParameter<ValueTyp
     {
       imageNumComponents = static_cast<int>(anari::componentsOf(samplerParamData.imageData->getType()));
     }
-    UsdSamplerRefData samplerRefData = {imageNumComponents, samplerRefTime, dataMemberId};
+    UsdSamplerRefData samplerRefData = {imageNumComponents, samplerRefTime, dataMemberId,
+      dataMemberId == DMI::OPACITY && sampler->writesOpacityToAlpha()};
 
     samplerHandles.push_back(sampler->getUsdHandle());
     samplerRefDatas.push_back(samplerRefData);
@@ -240,6 +242,20 @@ void UsdMaterial::bakeTransformSamplers(UsdGeometry* geometry, UsdDevice* device
   bakeCoordinatesOf(paramData.clearcoatRoughness);
   bakeCoordinatesOf(paramData.normal);
   bakeCoordinatesOf(paramData.occlusion);
+}
+
+void UsdMaterial::declareOpacitySampler(UsdDevice* device)
+{
+  const UsdMaterialData& paramData = getReadParams();
+
+  UsdSampler* opacitySampler = nullptr;
+  UsdSampler* colorSampler = nullptr;
+  paramData.opacity.Get(opacitySampler);
+  paramData.color.Get(colorSampler);
+
+  // The alpha of the texture of the color is its own; the MDL material connects otherwise
+  if(opacitySampler && !opacitySampler->isTransform())
+    opacitySampler->setOpacityInAlpha(opacitySampler != colorSampler && !device->getReadParams().outputMdlShader);
 }
 
 uint32_t UsdMaterial::getTexCoordAttributes() const
@@ -370,6 +386,31 @@ bool UsdMaterial::doCommitData(UsdDevice* device)
     assignParameterToMaterialInput(paramData.clearcoatRoughness, matData.ClearcoatRoughness, useDisplayColorOpacity, logInfo);
     assignParameterToMaterialInput(paramData.normal, matData.Normal, useDisplayColorOpacity, logInfo);
     assignParameterToMaterialInput(paramData.occlusion, matData.Occlusion, useDisplayColorOpacity, logInfo);
+
+    // A blended ANARI material covers the fraction `opacity` of its surface and lets the rest
+    // pass unchanged. The opacity of a preview surface is that of the body below its specular
+    // response, which a metal does not have: a blended metal reads as a full mirror there. The
+    // same surface as a preview surface: the metal covers its fraction as `metallic`, the rest
+    // is a dielectric whose opacity is what is left of the diffuse part. Where no dielectric is
+    // left, nothing has an index of refraction: what passes, passes straight.
+    // The opacity of the MDL material is a coverage as well, so this is for stages without it.
+    const bool constantCoverage = !matData.Opacity.SrcAttrib && !matData.Opacity.Sampler
+      && !matData.Metallic.SrcAttrib && !matData.Metallic.Sampler;
+    if(matData.AlphaMode == UsdBridgeMaterialData::AlphaModes::BLEND && constantCoverage
+      && !device->getReadParams().outputMdlShader)
+    {
+      const float coverage = std::min(std::max(matData.Opacity.Value, 0.0f), 1.0f);
+      const float metal = std::min(std::max(matData.Metallic.Value, 0.0f), 1.0f);
+      if(coverage < 1.0f && (metal > 0.0f || coverage == 0.0f))
+      {
+        const float metalCoverage = coverage * metal;
+        const float dielectricCoverage = coverage * (1.0f - metal);
+        matData.Metallic.Value = metalCoverage;
+        matData.Opacity.Value = (metalCoverage < 1.0f) ? dielectricCoverage / (1.0f - metalCoverage) : 1.0f;
+        if(dielectricCoverage <= 0.0f && !matData.Ior.SrcAttrib && !matData.Ior.Sampler)
+          matData.Ior.Value = 1.0f;
+      }
+    }
 
     setMaterialTimeVarying(matData.TimeVarying);
 

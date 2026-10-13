@@ -1012,7 +1012,11 @@ namespace
 
     // An input of one float takes the first channel of the texture, not its color
     const bool colorInput = samplerDMI == DMI::DIFFUSE || samplerDMI == DMI::EMISSIVECOLOR || samplerDMI == DMI::NORMAL;
-    if(PreviewSurface && !colorInput)
+    if(PreviewSurface && samplerRefData.OpacityFromAlpha)
+    {
+      outputToken = UsdBridgeTokens->a;
+    }
+    else if(PreviewSurface && !colorInput)
     {
       outputToken = UsdBridgeTokens->r;
       if(!refSampler.GetOutput(outputToken))

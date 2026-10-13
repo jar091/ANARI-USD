@@ -742,6 +742,9 @@ void UsdDevice::flushCommitList()
   {
     if(objCommitPair.first->getType() == ANARI_SURFACE)
       reinterpret_cast<UsdSurface*>(objCommitPair.first.ptr)->declareAttributeUse();
+    // Samplers are written before the materials they are used by
+    if(objCommitPair.first->getType() == ANARI_MATERIAL)
+      reinterpret_cast<UsdMaterial*>(objCommitPair.first.ptr)->declareOpacitySampler(this);
   }
 
   writeTypeToUsd<(int)ANARI_SAMPLER>();

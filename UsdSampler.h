@@ -84,6 +84,15 @@ class UsdSampler : public UsdBridgedBaseObject<UsdSampler, UsdSamplerData, UsdSa
     bool hasBakedCoordinates() const;
     const char* getBakedCoordinatesName() const;
     void bakeCoordinates(UsdGeometry* geometry, UsdDevice* device) const;
+
+    // The sampler of the opacity of a material writes that opacity (the first component of
+    // what it returns) into the alpha channel of its image as well. An opacity connected to
+    // the alpha of a texture is what readers take as the coverage of the surface, which is
+    // what it means in ANARI; connected to a color channel it is commonly taken as the
+    // translucency of glass. Set by the material before the samplers are written.
+    void setOpacityInAlpha(bool enable) { opacityInAlpha = enable; }
+    bool writesOpacityToAlpha() const;
+
     void updateBoundParameters(bool boundToInstance, const UsdSharedString*const* attribNames, size_t numAttribNames, UsdDevice* device);
 
     static constexpr ComponentPair componentParamNames[] = {
@@ -109,6 +118,8 @@ class UsdSampler : public UsdBridgedBaseObject<UsdSampler, UsdSamplerData, UsdSa
     std::vector<unsigned char> bakedImage;
     mutable std::string scalarOutputName;
     mutable std::string bakedCoordinatesName;
+
+    bool opacityInAlpha = false;
 
     // Writes transform*attribute + offset as a primvar of the geometry
     void bakePrimvar(UsdGeometry* geometry, const float* transform, const float* offset,

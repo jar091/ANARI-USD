@@ -773,6 +773,7 @@ struct UsdSamplerRefData
   int ImageNumComponents;
   double TimeStep;
   UsdBridgeMaterialData::DataMemberId DataMemberId; // Material input parameter to connect to
+  bool OpacityFromAlpha = false; // The opacity is in the alpha channel of the image, connect that
 };
 
 struct UsdBridgeCommonLightData

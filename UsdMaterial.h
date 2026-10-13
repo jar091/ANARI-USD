@@ -108,6 +108,10 @@ class UsdMaterial : public UsdBridgedBaseObject<UsdMaterial, UsdMaterialData, Us
     // Bit i is set if an image sampler of this material takes its texture coordinates from attribute i
     uint32_t getTexCoordAttributes() const;
 
+    // Tells the sampler of the opacity what it is used for, see UsdSampler::setOpacityInAlpha();
+    // called before the samplers are written
+    void declareOpacitySampler(UsdDevice* device);
+
   protected:
     bool deferCommit(UsdDevice* device) override;
     bool doCommitData(UsdDevice* device) override;

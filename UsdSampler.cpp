@@ -271,6 +271,13 @@ void UsdSampler::bakePrimvar(UsdGeometry* geometry, const float* m, const float*
     primvarName, values.data(), numElements, numComponents, scope);
 }
 
+bool UsdSampler::writesOpacityToAlpha() const
+{
+  const UsdDataArray* image = getReadParams().imageData;
+  return opacityInAlpha && samplerType == SAMPLER_2D && image && image->getData()
+    && image->getLayout().isDense() && image->getLayout().numItems3 <= 1;
+}
+
 // A UsdUVTexture has a scale and a bias per channel, an ANARI sampler a matrix and an offset
 // for its output. What the matrix does beyond a scale is applied to the texels here, which
 // gives the same result as applying it to the filtered texel: both are linear. The texels are
@@ -286,7 +293,8 @@ bool UsdSampler::bakeOutputTransform(const UsdSamplerData& paramData, UsdBridgeS
     && o[0] == 0.0f && o[1] == 0.0f && o[2] == 0.0f && o[3] == 0.0f;
   const UsdDataArray* image = paramData.imageData;
   const UsdDataLayout& layout = image->getLayout();
-  if(noTransform || !image->getData() || !layout.isDense() || layout.numItems3 > 1)
+  const bool alphaOpacity = writesOpacityToAlpha();
+  if((noTransform && !alphaOpacity) || !image->getData() || !layout.isDense() || layout.numItems3 > 1)
     return false;
 
   const ANARIDataType type = image->getType();
@@ -302,6 +310,7 @@ bool UsdSampler::bakeOutputTransform(const UsdSamplerData& paramData, UsdBridgeS
     float* out = &result[i*4];
     for(int row = 0; row < 4; ++row)
       out[row] = m[row]*texel.x + m[4+row]*texel.y + m[8+row]*texel.z + m[12+row]*texel.w + o[row];
+
     for(int c = 0; c < numColors; ++c)
       maxColor = std::max(maxColor, out[c]);
   }
@@ -313,27 +322,34 @@ bool UsdSampler::bakeOutputTransform(const UsdSamplerData& paramData, UsdBridgeS
     return static_cast<unsigned char>(encoded*255.0f + 0.5f);
   };
 
-  bakedImage.resize(numTexels * numComponents);
+  // With the opacity in it, the image gets an alpha channel if it has none
+  const int outComponents = alphaOpacity ? (numColors == 1 ? 2 : 4) : numComponents;
+
+  bakedImage.resize(numTexels * outComponents);
   for(size_t i = 0; i < numTexels; ++i)
   {
     const float* in = &result[i*4];
-    unsigned char* out = &bakedImage[i*numComponents];
+    unsigned char* out = &bakedImage[i*outComponents];
     for(int c = 0; c < numColors; ++c)
       out[c] = encodeSrgb(in[c] / maxColor);
-    if(numColors < numComponents)
-      out[numColors] = static_cast<unsigned char>(std::min(std::max(in[3], 0.0f), 1.0f)*255.0f + 0.5f);
+    if(numColors < outComponents)
+    {
+      const float alpha = alphaOpacity ? in[0] : in[3];
+      out[numColors] = static_cast<unsigned char>(std::min(std::max(alpha, 0.0f), 1.0f)*255.0f + 0.5f);
+    }
   }
 
   static const UsdBridgeType srgbTypes[] = {
     UsdBridgeType::UCHAR_SRGB_R, UsdBridgeType::UCHAR_SRGB_RA, UsdBridgeType::UCHAR_SRGB_RGB, UsdBridgeType::UCHAR_SRGB_RGBA};
 
   samplerData.Data = bakedImage.data();
-  samplerData.DataType = srgbTypes[numComponents-1];
+  samplerData.DataType = srgbTypes[outComponents-1];
+  samplerData.ImageNumComponents = outComponents;
   samplerData.ImageName = nullptr; // The texels are those of this sampler only
   samplerData.OutputScale = maxColor;
-  samplerData.ImageStride[0] = numComponents;
-  samplerData.ImageStride[1] = static_cast<int64_t>(layout.numItems1) * numComponents;
-  samplerData.ImageStride[2] = static_cast<int64_t>(numTexels) * numComponents;
+  samplerData.ImageStride[0] = outComponents;
+  samplerData.ImageStride[1] = static_cast<int64_t>(layout.numItems1) * outComponents;
+  samplerData.ImageStride[2] = static_cast<int64_t>(numTexels) * outComponents;
 
   return true;
 }
